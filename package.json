@@ -1,0 +1,26 @@
+{
+  "name": "discord-jellyfin-bot",
+  "version": "3.0.0",
+  "description": "Bot de Discord que reproduce películas y series de tu Jellyfin en un canal de voz (Go Live), con Discord Activity para ver contenido en grupo",
+  "type": "module",
+  "license": "MIT",
+  "author": "nemesbak",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nemesbak/discord-jellyfin-bot.git"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/bot.js",
+    "dev": "node --watch src/bot.js"
+  },
+  "dependencies": {
+    "@dank074/discord-video-stream": "^1.4.0",
+    "discord.js": "^14.16.0",
+    "dotenv": "^16.4.0",
+    "node-fetch": "^3.3.2",
+    "sodium-native": "^4.3.1"
+  }
+}

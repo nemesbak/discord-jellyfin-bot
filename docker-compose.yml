@@ -1,0 +1,19 @@
+services:
+
+  jellyfin-bot:
+    build: .
+    container_name: discord-jellyfin-bot
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - TZ=Europe/Madrid
+
+  jellyfin-activity:
+    build: ./activity
+    container_name: discord-jellyfin-activity
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - TZ=Europe/Madrid
+    ports:
+      - "3001:3001"

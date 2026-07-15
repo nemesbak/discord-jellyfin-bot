@@ -1,0 +1,8 @@
+node_modules/
+.env
+dist/
+activity/dist/
+*.log
+
+# Scripts locales no relacionados con el proyecto
+migrate_streamystats.py
