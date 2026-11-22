@@ -328,6 +328,18 @@ app.get('/api/jellyfin/stream/:id', async (req, res) => {
 
 // ── sincronización: una sala por instancia de la Activity ──────────────────
 const salas = new Map();   // instanceId -> { socks:Set, estado }
+// Cine del viernes: el bot (mismo contenedor) deja una peli puesta en pausa para cualquier cine que se abra
+let destacada = null;
+app.post('/api/destacada', express.json(), (req, res) => {
+  const ip = req.socket.remoteAddress || '';
+  const ok = crypto.createHash('sha256').update(BOT_TOKEN).digest('hex');
+  if (!/^(::ffff:)?127\.0\.0\.1$|^::1$/.test(ip) || req.get('x-bot') !== ok) return res.status(403).end();
+  const d = req.body || {};
+  if (!id(d.itemId)) return res.status(400).end();
+  destacada = { itemId: d.itemId, title: String(d.title ?? '').slice(0, 200), sub: String(d.sub ?? '').slice(0, 200),
+                hasta: Date.now() + Math.min(Number(d.horas) || 4, 12) * 3600e3 };
+  res.json({ ok: true });
+});
 server.on('upgrade', (req, sock, head) => {
   const u = new URL(req.url, 'http://x');
   const ruta = u.pathname.replace(/^\/\.proxy/, '');
@@ -337,7 +349,11 @@ server.on('upgrade', (req, sock, head) => {
 });
 
 wss.on('connection', ws => {
-  if (!salas.has(ws.sala)) salas.set(ws.sala, { socks: new Set(), estado: null, cola: [] });
+  if (!salas.has(ws.sala)) {
+    const dest = destacada && destacada.hasta > Date.now()
+      ? { itemId: destacada.itemId, title: destacada.title, sub: destacada.sub, t: 0, paused: true, updatedAt: Date.now() } : null;
+    salas.set(ws.sala, { socks: new Set(), estado: dest, cola: [] });
+  }
   const sala = salas.get(ws.sala);
   sala.socks.add(ws);
   const gente = () => { const p = JSON.stringify({ type: 'gente', n: sala.socks.size }); for (const o of sala.socks) if (o.readyState === 1) o.send(p); };
