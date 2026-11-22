@@ -83,7 +83,7 @@ img{display:block;max-width:100%}
 .tarjeta{scroll-snap-align:start;text-align:left;display:grid;gap:7px;align-content:start}
 .cartel{aspect-ratio:2/3;border-radius:10px;overflow:hidden;background:var(--bg3);position:relative;
   box-shadow:0 6px 18px rgba(0,0,0,.35);transition:transform .18s,box-shadow .18s}
-.cartel img{width:100%;height:100%;object-fit:cover}
+.cartel img{width:100%;height:100%;object-fit:cover;position:relative;z-index:1}
 .cartel .sin{position:absolute;inset:0;display:grid;place-items:center;padding:10px;text-align:center;font-size:.8rem;color:var(--mut)}
 .tarjeta:hover .cartel,.tarjeta:focus-visible .cartel{transform:translateY(-4px);box-shadow:0 12px 26px rgba(0,0,0,.5),0 0 0 2px var(--oro)}
 .tarjeta .nom{font-size:.82rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -157,7 +157,7 @@ img{display:block;max-width:100%}
 .tiempo{font-size:.82rem;color:#d6d9e0;margin-left:6px;font-variant-numeric:tabular-nums;white-space:nowrap}
 .hueco{flex:1}
 .menu-audio{position:relative}
-.lista-audio{position:absolute;bottom:calc(100% + 8px);right:0;min-width:220px;max-height:50vh;overflow:auto;
+.lista-audio{position:absolute;bottom:calc(100% + 8px);right:0;min-width:300px;max-width:90vw;max-height:50vh;overflow:auto;
   background:rgba(20,22,29,.97);border:1px solid var(--linea);border-radius:10px;padding:6px}
 .lista-audio button{display:block;width:100%;text-align:left;padding:9px 12px;border-radius:7px;font-size:.85rem}
 .lista-audio button:hover{background:rgba(255,255,255,.08)}

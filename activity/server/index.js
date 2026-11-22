@@ -31,6 +31,7 @@ const JF        = E('JELLYFIN_URL').replace(/\/$/, '');
 const JF_KEY    = E('JELLYFIN_API_KEY');
 const PORT      = +E('PORT', '3001');
 const MAX_BITRATE = E('MAX_BITRATE', '8000000');
+const PREVIEW = E('PREVIEW') === '1';   // solo para probar fuera de Discord en la red local; NUNCA en el contenedor público
 for (const [k, v] of Object.entries({ CLIENT_ID, BOT_TOKEN, SECRET, JF, JF_KEY }))
   if (!v) { console.error(`✗ Falta ${k}`); process.exit(1); }
 
@@ -79,10 +80,11 @@ app.use(express.json({ limit: '10kb' }));
 app.use((req, _res, next) => { if (req.url.startsWith('/.proxy/')) req.url = req.url.slice(7); next(); });
 app.use(express.static(join(__dirname, '../dist'), { maxAge: '1h', index: 'index.html' }));
 
-app.get('/api/config', (_req, res) => res.json({ clientId: CLIENT_ID }));
+app.get('/api/config', (_req, res) => res.json({ clientId: CLIENT_ID, preview: PREVIEW }));
 
 app.post('/api/sesion', async (req, res) => {
   try {
+    if (PREVIEW && req.body?.instanceId === 'preview') return res.json({ s: nuevaSesion('preview', []) });
     const v = await instanciaValida(req.body?.instanceId);
     if (!v) return res.status(403).json({ error: 'Esta actividad solo funciona dentro del servidor de HomeStream.' });
     res.json({ s: nuevaSesion(req.body.instanceId, v.users) });

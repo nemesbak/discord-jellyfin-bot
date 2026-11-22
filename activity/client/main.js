@@ -18,11 +18,13 @@ function aviso(t) { const d = document.createElement('div'); d.className = 'toas
 let sdk = null;
 try {
   $('loading').querySelector('p').textContent = 'Conectando con Discord…';
-  const { clientId } = await fetch(P + '/api/config').then(r => r.json());
-  sdk = new DiscordSDK(clientId);
-  await Promise.race([sdk.ready(), new Promise((_, no) => setTimeout(() => no(new Error('Discord no responde')), 10000))]);
+  const { clientId, preview } = await fetch(P + '/api/config').then(r => r.json());
+  if (!(preview && !P)) {
+    sdk = new DiscordSDK(clientId);
+    await Promise.race([sdk.ready(), new Promise((_, no) => setTimeout(() => no(new Error('Discord no responde')), 10000))]);
+  }
   const ses = await fetch(P + '/api/sesion', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                                               body: JSON.stringify({ instanceId: sdk.instanceId }) })
+                                               body: JSON.stringify({ instanceId: sdk ? sdk.instanceId : 'preview' }) })
     .then(r => r.json()).catch(() => ({ error: 'No se pudo conectar con HomeStream.' }));
   if (!ses.s) throw new Error(ses.error || 'Sin acceso');
   S = ses.s;
