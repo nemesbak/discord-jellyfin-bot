@@ -20,8 +20,9 @@
 
     <!-- Barra superior (todas las vistas menos el reproductor) -->
     <header id="topbar">
-      <button id="btn-atras" class="icono hidden" aria-label="Volver">‹</button>
-      <div class="marca" id="btn-inicio">HOME<b>STREAM</b> <span>Cine</span></div>
+      <button id="btn-atras" class="btn-icon hidden" aria-label="Volver">‹</button>
+      <div class="marca" id="btn-inicio">HOME<b>STREAM</b></div>
+      <nav class="tabs" id="tabs" aria-label="Secciones"></nav>
       <label class="buscar">
         <span aria-hidden="true">⌕</span>
         <input id="q" type="search" placeholder="Buscar pelis y series" autocomplete="off" spellcheck="false" />
@@ -32,7 +33,38 @@
     <!-- INICIO -->
     <main id="v-inicio" class="vista">
       <section id="hero" class="hero"></section>
+      <section class="fila" id="fila-generos"><h2>Explora por género</h2><div class="carril generos-carril" id="generos-inicio"></div></section>
       <div id="filas"></div>
+    </main>
+
+    <!-- BIBLIOTECA (Películas, Series, Anime, 4K…) con géneros y orden, como en Jellyfin -->
+    <main id="v-biblio" class="vista hidden">
+      <div class="biblio-cab">
+        <h1 id="biblio-titulo">Películas</h1>
+        <span class="badge" id="biblio-total"></span>
+      </div>
+      <div class="filtros">
+        <div class="chips" id="biblio-generos" aria-label="Géneros"></div>
+        <div class="filtros-2">
+          <div class="segmentado" id="biblio-orden" role="group" aria-label="Ordenar">
+            <button data-o="recientes" class="on">Recientes</button><button data-o="nota">Mejor valoradas</button>
+            <button data-o="az">A-Z</button><button data-o="anio">Año</button><button data-o="azar">🎲 Al azar</button>
+          </div>
+          <select id="biblio-decada" class="select" aria-label="Década">
+            <option value="">Todas las épocas</option><option>2020</option><option>2010</option><option>2000</option>
+            <option>1990</option><option>1980</option><option>1970</option>
+          </select>
+        </div>
+      </div>
+      <div id="biblio-rejilla" class="rejilla"></div>
+      <p id="biblio-vacio" class="vacio hidden">No hay nada con estos filtros.</p>
+      <div class="mas"><button id="biblio-mas" class="btn-ghost hidden">Cargar más</button></div>
+    </main>
+
+    <!-- TODAS LAS BIBLIOTECAS (botón «Más» del móvil) -->
+    <main id="v-libs" class="vista hidden">
+      <h2 class="titulo-seccion" style="margin-top:8px">Bibliotecas</h2>
+      <div id="libs" class="libs"></div>
     </main>
 
     <!-- BÚSQUEDA -->
@@ -51,6 +83,9 @@
       </section>
     </main>
 
+    <!-- Barra inferior en el móvil -->
+    <nav class="abajo" id="abajo" aria-label="Secciones"></nav>
+
     <!-- REPRODUCTOR -->
     <section id="v-player" class="hidden">
       <video id="video" playsinline webkit-playsinline preload="auto"></video>
@@ -58,11 +93,11 @@
       <button id="p-grande" class="p-grande hidden" aria-label="Reproducir">▶</button>
       <div id="p-error" class="p-error hidden">
         <p>No se puede reproducir este título.</p>
-        <button id="p-directo" class="boton">Probar sin convertir</button>
+        <button id="p-directo" class="btn-primary">Probar sin convertir</button>
       </div>
 
       <div class="p-arriba">
-        <button id="p-volver" class="icono" aria-label="Volver">‹</button>
+        <button id="p-volver" class="btn-icon" aria-label="Volver">‹</button>
         <div class="p-titulo"><b id="p-nombre"></b><span id="p-sub"></span></div>
         <div class="gente" id="p-gente">👥 <b>1</b></div>
       </div>
@@ -75,18 +110,18 @@
           <div class="barra-tip hidden" id="barra-tip">0:00</div>
         </div>
         <div class="p-controles">
-          <button id="p-play" class="icono" aria-label="Pausa">❚❚</button>
-          <button id="p-menos" class="icono" aria-label="Atrás 10 segundos">↺<small>10</small></button>
-          <button id="p-mas" class="icono" aria-label="Adelante 10 segundos">↻<small>10</small></button>
+          <button id="p-play" class="btn-icon" aria-label="Pausa">❚❚</button>
+          <button id="p-menos" class="btn-icon" aria-label="Atrás 10 segundos">↺<small>10</small></button>
+          <button id="p-mas" class="btn-icon" aria-label="Adelante 10 segundos">↻<small>10</small></button>
           <span class="tiempo"><span id="t-actual">0:00</span> / <span id="t-total">0:00</span></span>
           <span class="hueco"></span>
-          <button id="p-siguiente" class="boton-sec hidden">Siguiente episodio ›</button>
+          <button id="p-siguiente" class="btn-ghost btn-sm hidden">Siguiente episodio ›</button>
           <div class="menu-audio hidden" id="menu-audio">
-            <button id="p-audio" class="boton-sec">🔊 <span id="p-audio-txt">Audio</span></button>
+            <button id="p-audio" class="btn-ghost btn-sm">🔊 <span id="p-audio-txt">Audio</span></button>
             <div class="lista-audio hidden" id="lista-audio"></div>
           </div>
-          <button id="p-vol" class="icono" aria-label="Silenciar">🔊</button>
-          <button id="p-full" class="icono" aria-label="Pantalla completa">⛶</button>
+          <button id="p-vol" class="btn-icon" aria-label="Silenciar">🔊</button>
+          <button id="p-full" class="btn-icon" aria-label="Pantalla completa">⛶</button>
         </div>
       </div>
     </section>

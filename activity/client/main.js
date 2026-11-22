@@ -52,18 +52,106 @@ function arrancar() {
   });
 
   // ── navegación ───────────────────────────────────────────────────────────
-  const vistas = ['v-inicio', 'v-buscar', 'v-ficha'];
+  const vistas = ['v-inicio', 'v-biblio', 'v-libs', 'v-buscar', 'v-ficha'];
   const pila = [];
   function ir(v, guardar = true) {
     const actual = vistas.find(x => !$(x).classList.contains('hidden'));
     if (guardar && actual && actual !== v) pila.push(actual);
     vistas.forEach(x => $(x).classList.toggle('hidden', x !== v));
-    $('btn-atras').classList.toggle('hidden', v === 'v-inicio');
+    $('btn-atras').classList.toggle('hidden', v === 'v-inicio' || v === 'v-biblio');
     $(v).scrollTop = 0;
+    if (v === 'v-inicio') marcarTab('inicio');
   }
   function atras() { ir(pila.pop() || 'v-inicio', false); if (!$('v-buscar').classList.contains('hidden')) return; $('q').value = ''; }
   $('btn-atras').onclick = atras;
   $('btn-inicio').onclick = () => { pila.length = 0; $('q').value = ''; ir('v-inicio', false); };
+
+  // ── pestañas: Inicio + cada biblioteca de Jellyfin (arriba en PC, abajo en el móvil) ──
+  let bibliotecas = [];
+  const ICONOS = { Movie: '🎬', Series: '📺', 'Movie,Series': '🎞️' };
+  const icono = b => /anime/i.test(b.Name) ? '🍥' : /4k|uhd/i.test(b.Name) ? '💎' : /infantil|kids|niñ/i.test(b.Name) ? '🧸' : /docu/i.test(b.Name) ? '🌍' : ICONOS[b.tipo] ?? '🎞️';
+  function marcarTab(clave) { document.querySelectorAll('[data-tab]').forEach(b => b.classList.toggle('on', b.dataset.tab === clave)); }
+  function pintarTabs() {
+    const items = [{ clave: 'inicio', nom: 'Inicio', ico: '🏠', ir: () => { pila.length = 0; $('q').value = ''; ir('v-inicio', false); } },
+      ...bibliotecas.map(b => ({ clave: b.Id, nom: b.Name, ico: icono(b), ir: () => biblio(b) })),
+      { clave: 'buscar', nom: 'Buscar', ico: '⌕', soloMovil: true, ir: () => { $('q').focus(); } }];
+    for (const [cont, enMovil] of [[$('tabs'), false], [$('abajo'), true]]) {
+      let lista = items.filter(i => enMovil || !i.soloMovil);
+      if (enMovil) {                                     // móvil: Inicio, Películas, Series, Más (todas) y Buscar
+        const k = re => bibliotecas.find(b => re.test(b.Name));
+        const fijas = [k(/^pel[ií]culas$/i), k(/^series$/i)].filter(Boolean).map(b => lista.find(i => i.clave === b.Id));
+        lista = [lista[0], ...fijas, { clave: 'mas', nom: 'Más', ico: '☰', ir: () => { ir('v-libs', false); marcarTab('mas'); } }, lista[lista.length - 1]];
+      }
+      cont.replaceChildren(...lista.map(i => {
+        const b = document.createElement('button');
+        b.dataset.tab = i.clave;
+        const conIco = /^\p{Extended_Pictographic}/u.test(i.nom);
+        b.innerHTML = enMovil ? `<span>${i.ico}</span><small>${esc(i.nom)}</small>` : (conIco ? esc(i.nom) : `${i.ico} ${esc(i.nom)}`);
+        b.onclick = i.ir;
+        return b;
+      }));
+    }
+    marcarTab('inicio');
+    $('libs').replaceChildren(...bibliotecas.map(b => {
+      const x = document.createElement('button');
+      x.className = 'lib-card';
+      x.innerHTML = `<span>${icono(b)}</span><b>${esc(b.Name)}</b>`;
+      x.onclick = () => biblio(b);
+      return x;
+    }));
+  }
+
+  // ── biblioteca con géneros, orden y década ───────────────────────────────
+  const B = { lib: null, genero: '', orden: 'recientes', decada: '', start: 0, total: 0, n: 0 };
+  async function biblio(lib, genero = '') {
+    Object.assign(B, { lib, genero, orden: 'recientes', decada: '', start: 0 });
+    pila.length = 0; $('q').value = '';
+    ir('v-biblio', false);
+    marcarTab(lib.Id ?? '');
+    $('biblio-titulo').textContent = lib.Name;
+    $('biblio-decada').value = '';
+    $('biblio-orden').querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.o === 'recientes'));
+    $('biblio-generos').innerHTML = '';
+    const q = new URLSearchParams({ type: lib.tipo }); if (lib.Id) q.set('parentId', lib.Id);
+    if (!genero) api(`/api/jellyfin/genres?${q}`).then(gs => {
+      const todos = [{ Id: '', Name: 'Todos' }, ...gs];
+      $('biblio-generos').replaceChildren(...todos.map(g => {
+        const b = document.createElement('button');
+        b.className = 'chip-g' + (g.Id === B.genero ? ' on' : '');
+        b.textContent = g.Name;
+        b.onclick = () => { B.genero = g.Id; $('biblio-generos').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); cargar(true); };
+        return b;
+      }));
+    }).catch(() => {});
+    cargar(true);
+  }
+  async function cargar(nuevo) {
+    if (nuevo) { B.start = 0; B.n = 0; $('biblio-rejilla').innerHTML = '<div class="spinner" style="margin:30px auto;grid-column:1/-1"></div>'; }
+    const q = new URLSearchParams({ type: B.lib.tipo, sort: B.orden, start: B.start, limit: 60 });
+    if (B.lib.Id) q.set('parentId', B.lib.Id);
+    if (B.genero) q.set('genreId', B.genero);
+    if (B.decada) q.set('decada', B.decada);
+    const pedido = q.toString(); B.ultimo = pedido;
+    const r = await api(`/api/jellyfin/browse?${q}`).catch(() => ({ items: [], total: 0 }));
+    if (B.ultimo !== pedido) return;
+    if (nuevo) $('biblio-rejilla').innerHTML = '';
+    $('biblio-rejilla').append(...r.items.map(tarjeta));
+    B.n += r.items.length; B.start += r.items.length; B.total = r.total;
+    $('biblio-total').textContent = `${r.total.toLocaleString('es-ES')} títulos`;
+    $('biblio-vacio').classList.toggle('hidden', B.n > 0);
+    $('biblio-mas').classList.toggle('hidden', B.n >= B.total);
+  }
+  $('biblio-orden').querySelectorAll('button').forEach(b => (b.onclick = () => {
+    B.orden = b.dataset.o; $('biblio-orden').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); cargar(true);
+  }));
+  $('biblio-decada').onchange = () => { B.decada = $('biblio-decada').value; cargar(true); };
+  $('biblio-mas').onclick = () => cargar(false);
+  $('v-biblio').addEventListener('scroll', () => {          // carga sola al llegar al final
+    const v = $('v-biblio');
+    if (v.scrollTop + v.clientHeight > v.scrollHeight - 500 && !$('biblio-mas').classList.contains('hidden') && !B.cargando) {
+      B.cargando = true; cargar(false).finally(() => (B.cargando = false));
+    }
+  });
 
   function tarjeta(it) {
     const b = document.createElement('button');
@@ -96,6 +184,21 @@ function arrancar() {
   }
 
   async function inicio() {
+    bibliotecas = await api('/api/jellyfin/libraries').catch(() => []);
+    pintarTabs();
+    api('/api/jellyfin/genres?type=Movie,Series').then(gs => {
+      const preferidos = ['Acción', 'Comedia', 'Drama', 'Animación', 'Terror', 'Ciencia ficción', 'Aventura', 'Thriller', 'Suspense',
+                          'Romance', 'Fantasía', 'Familia', 'Crimen', 'Documental', 'Misterio', 'Bélica', 'Historia', 'Música', 'Western'];
+      const lista = [...gs.filter(g => preferidos.includes(g.Name)), ...gs.filter(g => !preferidos.includes(g.Name))].slice(0, 24);
+      $('generos-inicio').replaceChildren(...lista.map((g, i) => {
+        const b = document.createElement('button');
+        b.className = 'genero-card';
+        b.style.setProperty('--h', (200 + i * 37) % 360);
+        b.textContent = g.Name;
+        b.onclick = () => biblio({ Id: null, Name: g.Name, tipo: 'Movie,Series' }, g.Id);
+        return b;
+      }));
+    }).catch(() => $('fila-generos').remove());
     const [pelis, series, top] = await Promise.all([
       api('/api/jellyfin/recent?type=Movie').catch(() => []),
       api('/api/jellyfin/recent?type=Series').catch(() => []),
@@ -109,7 +212,7 @@ function arrancar() {
           ${d.hasLogo ? `<img class="hero-logo" alt="${esc(limpio(d.Name))}" src="${img(d.Id, 'Logo', 600)}">` : `<h1>${esc(limpio(d.Name))}</h1>`}
           <div class="meta">${metaHTML(d)}</div>
           <p>${esc(d.Overview ?? '')}</p>
-          <div class="acciones"><button class="boton" id="hero-ver">▶ Ver juntos</button><button class="boton-sec" id="hero-info">ⓘ Más info</button></div>
+          <div class="acciones"><button class="btn-primary btn-lg" id="hero-ver">▶ Ver juntos</button><button class="btn-ghost btn-lg" id="hero-info">ⓘ Más info</button></div>
         </div>`;
       $('hero-ver').onclick = () => reproducir(d, 0, false, true);
       $('hero-info').onclick = () => ficha(d.Id);
@@ -117,6 +220,10 @@ function arrancar() {
     fila('Películas recién añadidas', pelis);
     fila('Series con capítulos nuevos', series);
     fila('Las mejor valoradas de los últimos años', top.filter(t => t.Id !== destacada?.Id));
+    for (const b of bibliotecas.filter(b => /anime|4k|infantil|docu/i.test(b.Name))) {
+      const r = await api(`/api/jellyfin/browse?type=${encodeURIComponent(b.tipo)}&parentId=${b.Id}&limit=24`).catch(() => ({ items: [] }));
+      fila(`${icono(b)} Nuevo en ${b.Name}`, r.items);
+    }
   }
 
   // ── búsqueda ─────────────────────────────────────────────────────────────
@@ -126,7 +233,7 @@ function arrancar() {
     const q = $('q').value.trim();
     if (!q) { ir('v-inicio', false); return; }
     tBuscar = setTimeout(async () => {
-      if ($('v-buscar').classList.contains('hidden')) ir('v-buscar');
+      if ($('v-buscar').classList.contains('hidden')) { ir('v-buscar'); marcarTab('buscar'); }
       $('buscar-titulo').textContent = `Resultados de «${q}»`;
       const r = await api(`/api/jellyfin/search?q=${encodeURIComponent(q)}&limit=40`).catch(() => []);
       $('resultados').replaceChildren(...r.map(tarjeta));
@@ -150,7 +257,7 @@ function arrancar() {
         <div class="meta">${metaHTML(d)}</div>
         ${d.Genres?.length ? `<div class="generos">${esc(d.Genres.slice(0, 4).join(' · '))}</div>` : ''}
         <p>${esc(d.Overview ?? '')}</p>
-        ${esSerie ? '' : '<div class="acciones"><button class="boton" id="ficha-ver">▶ Ver juntos</button></div>'}
+        ${esSerie ? '' : '<div class="acciones"><button class="btn-primary btn-lg" id="ficha-ver">▶ Ver juntos</button></div>'}
       </div>`;
     if (!esSerie) { $('ficha-ver').onclick = () => reproducir(d, 0, false, true); return; }
     serieActual = d;

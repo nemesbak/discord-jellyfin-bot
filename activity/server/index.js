@@ -138,6 +138,46 @@ app.get('/api/jellyfin/search', (req, res) => lista(res, `/Items?${new URLSearch
   searchTerm: String(req.query.q ?? '').slice(0, 100), IncludeItemTypes: 'Movie,Series', Recursive: 'true',
   Limit: String(Math.min(+req.query.limit || 24, 50)), Fields: CAMPOS })}`));
 
+// ── explorar como en Jellyfin: bibliotecas, géneros y listado con filtros ───
+const TIPOS_BIB = { movies: 'Movie', tvshows: 'Series', mixed: 'Movie,Series', homevideos: 'Movie', musicvideos: '' };
+app.get('/api/jellyfin/libraries', async (_req, res) => {
+  try {
+    const d = await (await jf('/Library/MediaFolders')).json();
+    res.json((d.Items ?? []).filter(b => (b.CollectionType ?? 'mixed') in TIPOS_BIB && TIPOS_BIB[b.CollectionType ?? 'mixed'])
+      .filter(b => !/descubre|pide/i.test(b.Name))                       // biblioteca virtual de Favarr
+      .map(b => ({ Id: b.Id, Name: b.Name.replace(/^\d+\.\s*/, ''), tipo: TIPOS_BIB[b.CollectionType ?? 'mixed'] })));
+  } catch { res.status(502).json([]); }
+});
+
+// géneros que vienen en inglés de algunos metadatos (ya existen en castellano)
+const INGLES = new Set(['Action', 'Adventure', 'Animation', 'Comedy', 'Crime', 'Documentary', 'Drama', 'Family', 'Fantasy', 'History',
+  'Horror', 'Music', 'Mystery', 'Romance', 'Science Fiction', 'Sci-Fi & Fantasy', 'Thriller', 'War', 'Western', 'Action & Adventure',
+  'Kids', 'News', 'Reality', 'Soap', 'Talk', 'War & Politics', 'TV Movie', 'Sport', 'Musical', 'Biography', 'Suspense']);
+const tipoOk = t => (['Movie', 'Series', 'Movie,Series'].includes(t) ? t : 'Movie,Series');
+app.get('/api/jellyfin/genres', async (req, res) => {
+  const p = new URLSearchParams({ SortBy: 'SortName', Recursive: 'true', IncludeItemTypes: tipoOk(req.query.type) });
+  if (id(req.query.parentId)) p.set('ParentId', req.query.parentId);
+  try {
+    const d = await (await jf(`/Genres?${p}`)).json();
+    res.json((d.Items ?? []).filter(g => !INGLES.has(g.Name)).map(g => ({ Id: g.Id, Name: g.Name })));
+  } catch { res.status(502).json([]); }
+});
+
+const ORDEN = { recientes: ['DateCreated', 'Descending'], nota: ['CommunityRating,SortName', 'Descending'],
+                az: ['SortName', 'Ascending'], anio: ['PremiereDate,SortName', 'Descending'], azar: ['Random', 'Ascending'] };
+app.get('/api/jellyfin/browse', async (req, res) => {
+  const [SortBy, SortOrder] = ORDEN[req.query.sort] ?? ORDEN.recientes;
+  const p = new URLSearchParams({ SortBy, SortOrder, Recursive: 'true', IncludeItemTypes: tipoOk(req.query.type), Fields: CAMPOS,
+    StartIndex: String(Math.max(0, +req.query.start || 0)), Limit: String(Math.min(+req.query.limit || 60, 100)), EnableTotalRecordCount: 'true' });
+  if (id(req.query.parentId)) p.set('ParentId', req.query.parentId);
+  if (id(req.query.genreId)) p.set('GenreIds', req.query.genreId);
+  if (/^\d{4}$/.test(req.query.decada ?? '')) p.set('Years', Array.from({ length: 10 }, (_, i) => +req.query.decada + i).join(','));
+  try {
+    const d = await (await jf(`/Items?${p}`)).json();
+    res.json({ items: d.Items ?? [], total: d.TotalRecordCount ?? 0 });
+  } catch { res.status(502).json({ items: [], total: 0 }); }
+});
+
 app.get('/api/jellyfin/seasons/:id', (req, res) => {
   if (!id(req.params.id)) return res.status(400).json([]);
   lista(res, `/Shows/${req.params.id}/Seasons?Fields=Overview`);
