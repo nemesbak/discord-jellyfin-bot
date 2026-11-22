@@ -1,4 +1,3 @@
-# ── Stage 1: build frontend ────────────────────────────────────────────────────
 FROM node:20-slim AS builder
 WORKDIR /build
 COPY package.json .
@@ -7,14 +6,13 @@ COPY client/ client/
 COPY vite.config.js .
 RUN npm run build
 
-# ── Stage 2: production server ─────────────────────────────────────────────────
 FROM node:20-slim
 WORKDIR /app
 COPY package.json .
-RUN npm install --omit=dev
+RUN npm install --omit=dev && npm cache clean --force
 COPY server/ server/
 COPY --from=builder /build/dist ./dist
-
-ENV NODE_ENV=production
+ENV NODE_ENV=production PORT=3001
+USER node
 EXPOSE 3001
 CMD ["node", "server/index.js"]

@@ -1,236 +1,246 @@
-import 'dotenv/config';
+// Servidor de la Discord Activity «Jellyfin» (v4, 2026-11-22).
+// - Solo funciona dentro de una Activity real de nuestro servidor de Discord: el cliente manda su instanceId,
+//   lo comprobamos con la API de Discord (bot de la app) y damos una sesión firmada de 12 h.
+// - Proxy a Jellyfin solo hacia JELLYFIN_URL (antes era un proxy abierto a cualquier URL).
+// - Jellyfin 12 solo acepta la cabecera «Authorization: MediaBrowser Token=…» (api_key en la URL da 401).
 import express from 'express';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
-import fetch from 'node-fetch';
+import crypto from 'crypto';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { Readable } from 'stream';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const { DISCORD_CLIENT_ID, DISCORD_CLIENT_SECRET, JELLYFIN_URL, JELLYFIN_API_KEY, PORT = 3001 } = process.env;
-const JF   = (JELLYFIN_URL ?? '').replace(/\/$/, '');
-const JF_H = { 'X-Emby-Authorization': `MediaBrowser Client="DiscordActivity", Device="Server", DeviceId="activity001", Version="1.0.0", Token="${JELLYFIN_API_KEY}"` };
+// Opcional: claves desde un archivo montado (ENV_FILE), para no ponerlas en la plantilla. ENV_MAP=destino:origen,...
+if (process.env.ENV_FILE && fs.existsSync(process.env.ENV_FILE)) {
+  const f = Object.fromEntries(fs.readFileSync(process.env.ENV_FILE, 'utf8').split(/\r?\n/)
+    .map(l => l.match(/^([A-Z0-9_]+)=(.*)$/)).filter(Boolean).map(m => [m[1], m[2].trim().replace(/^["']|["']$/g, '')]));
+  for (const par of (process.env.ENV_MAP ?? '').split(',').filter(Boolean)) {
+    const [dst, src] = par.split(':');
+    if (!process.env[dst] && f[src]) process.env[dst] = f[src];
+  }
+}
+const E = (k, d) => (process.env[k] ?? d ?? '').trim();
+const CLIENT_ID = E('DISCORD_CLIENT_ID');
+const BOT_TOKEN = E('DISCORD_BOT_TOKEN');
+const GUILDS    = E('DISCORD_GUILDS').split(',').map(s => s.trim()).filter(Boolean);
+const SECRET    = E('SESSION_SECRET');
+const JF        = E('JELLYFIN_URL').replace(/\/$/, '');
+const JF_KEY    = E('JELLYFIN_API_KEY');
+const PORT      = +E('PORT', '3001');
+const MAX_BITRATE = E('MAX_BITRATE', '8000000');
+for (const [k, v] of Object.entries({ CLIENT_ID, BOT_TOKEN, SECRET, JF, JF_KEY }))
+  if (!v) { console.error(`✗ Falta ${k}`); process.exit(1); }
+
+const JF_H = { Authorization: `MediaBrowser Client="Discord Activity", Device="Servidor", DeviceId="discord-activity", Version="4.0.0", Token="${JF_KEY}"` };
+const JF_ORIGIN = new URL(JF).origin;
+
+// ── sesiones firmadas (sin base de datos) ───────────────────────────────────
+const firmar = d => crypto.createHmac('sha256', SECRET).update(d).digest('base64url');
+function nuevaSesion(instanceId, userIds) {
+  const d = Buffer.from(JSON.stringify({ i: instanceId, u: userIds, e: Date.now() + 12 * 3600e3 })).toString('base64url');
+  return `${d}.${firmar(d)}`;
+}
+function leerSesion(s) {
+  if (!s || typeof s !== 'string') return null;
+  const [d, f] = s.split('.');
+  if (!d || !f || f.length !== 43) return null;
+  if (!crypto.timingSafeEqual(Buffer.from(f), Buffer.from(firmar(d)))) return null;
+  const v = JSON.parse(Buffer.from(d, 'base64url').toString());
+  return v.e > Date.now() ? v : null;
+}
+
+// Comprueba con Discord que la instancia existe, es de esta app y está en uno de nuestros servidores
+const cacheInst = new Map();
+async function instanciaValida(instanceId) {
+  if (!/^[\w-]{4,80}$/.test(instanceId ?? '')) return null;
+  const c = cacheInst.get(instanceId);
+  if (c && c.t > Date.now() - 60e3) return c.v;
+  const r = await fetch(`https://discord.com/api/v10/applications/${CLIENT_ID}/activity-instances/${encodeURIComponent(instanceId)}`,
+                        { headers: { Authorization: `Bot ${BOT_TOKEN}` } });
+  let v = null;
+  if (r.ok) {
+    const d = await r.json();
+    const guild = d.location?.guild_id;
+    if (!GUILDS.length || GUILDS.includes(guild)) v = { guild, users: d.users ?? [] };
+  }
+  cacheInst.set(instanceId, { t: Date.now(), v });
+  return v;
+}
 
 const app    = express();
 const server = createServer(app);
-const wss    = new WebSocketServer({ server, path: '/ws' });
-app.use(express.json());
-app.use(express.static(join(__dirname, '../dist')));
+const wss    = new WebSocketServer({ noServer: true });
+app.disable('x-powered-by');
+app.use(express.json({ limit: '10kb' }));
+// Discord a veces entrega las rutas con el prefijo /.proxy
+app.use((req, _res, next) => { if (req.url.startsWith('/.proxy/')) req.url = req.url.slice(7); next(); });
+app.use(express.static(join(__dirname, '../dist'), { maxAge: '1h', index: 'index.html' }));
 
-const JF_FIELDS = 'Overview,ProductionYear,RunTimeTicks,Genres';
+app.get('/api/config', (_req, res) => res.json({ clientId: CLIENT_ID }));
 
-app.get('/api/config', (_req, res) => res.json({ clientId: DISCORD_CLIENT_ID }));
-
-app.post('/api/token', async (req, res) => {
-  const { code } = req.body;
-  if (!code) return res.status(400).json({ error: 'Missing code' });
+app.post('/api/sesion', async (req, res) => {
   try {
-    const r = await fetch('https://discord.com/api/oauth2/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ client_id: DISCORD_CLIENT_ID, client_secret: DISCORD_CLIENT_SECRET, grant_type: 'authorization_code', code }),
-    });
-    res.json({ access_token: (await r.json()).access_token });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+    const v = await instanciaValida(req.body?.instanceId);
+    if (!v) return res.status(403).json({ error: 'Esta actividad solo funciona dentro del servidor de HomeStream.' });
+    res.json({ s: nuevaSesion(req.body.instanceId, v.users) });
+  } catch (e) {
+    console.error('sesion', e.message);
+    res.status(502).json({ error: 'No se pudo comprobar la actividad con Discord.' });
+  }
 });
 
-// Novedades
-app.get('/api/jellyfin/recent', async (req, res) => {
-  const params = new URLSearchParams({
-    SortBy: 'DateCreated', SortOrder: 'Descending',
-    IncludeItemTypes: 'Movie,Series', Recursive: 'true',
-    Limit: '30', Fields: JF_FIELDS,
-  });
+// todo lo de /api/jellyfin necesita sesión (?s= para que valga también en <img>, <video> y hls.js)
+app.use('/api/jellyfin', (req, res, next) => {
+  const s = leerSesion(req.query.s || req.get('x-sesion'));
+  if (!s) return res.status(401).json({ error: 'Sesión caducada: vuelve a abrir la actividad.' });
+  req.sesion = req.query.s || req.get('x-sesion');
+  next();
+});
+
+const jf = (ruta, extra = {}) => fetch(`${JF}${ruta}`, { headers: { ...JF_H, ...extra } });
+const id = v => /^[a-f0-9]{32}$/i.test(v ?? '') ? v : null;
+const CAMPOS = 'Overview,ProductionYear,RunTimeTicks,Genres';
+
+async function lista(res, ruta) {
   try {
-    const r = await fetch(`${JF}/Items?${params}`, { headers: JF_H });
-    res.json((await r.json()).Items ?? []);
+    const r = await jf(ruta);
+    res.json(r.ok ? ((await r.json()).Items ?? []) : []);
   } catch { res.status(502).json([]); }
-});
-
-// Busqueda
-app.get('/api/jellyfin/search', async (req, res) => {
-  const { q = '', limit = 24 } = req.query;
-  const params = new URLSearchParams({ searchTerm: q, IncludeItemTypes: 'Movie,Series', Recursive: 'true', Limit: String(limit), Fields: JF_FIELDS });
-  try {
-    const r = await fetch(`${JF}/Items?${params}`, { headers: JF_H });
-    res.json((await r.json()).Items ?? []);
-  } catch { res.status(502).json([]); }
-});
-
-// Temporadas
-app.get('/api/jellyfin/seasons/:id', async (req, res) => {
-  try {
-    const r = await fetch(`${JF}/Shows/${req.params.id}/Seasons?Fields=Overview&api_key=${JELLYFIN_API_KEY}`, { headers: JF_H });
-    res.json((await r.json()).Items ?? []);
-  } catch { res.status(502).json([]); }
-});
-
-// Episodios
-app.get('/api/jellyfin/episodes/:id', async (req, res) => {
-  const { seasonId } = req.query;
-  const params = new URLSearchParams({ Fields: 'Overview,RunTimeTicks', SeasonId: seasonId ?? '', api_key: JELLYFIN_API_KEY });
-  try {
-    const r = await fetch(`${JF}/Shows/${req.params.id}/Episodes?${params}`, { headers: JF_H });
-    res.json((await r.json()).Items ?? []);
-  } catch { res.status(502).json([]); }
-});
-
-// Imagen
-app.get('/api/jellyfin/image/:id', async (req, res) => {
-  const { type = 'Primary', width = 300 } = req.query;
-  try {
-    const r = await fetch(`${JF}/Items/${req.params.id}/Images/${type}?maxWidth=${width}`, { headers: JF_H });
-    if (!r.ok) return res.status(404).end();
-    res.set('Content-Type', r.headers.get('content-type') ?? 'image/jpeg');
-    r.body.pipe(res);
-  } catch { res.status(502).end(); }
-});
-
-// Pistas de audio de un item
-app.get('/api/jellyfin/mediainfo/:id', async (req, res) => {
-  try {
-    const r = await fetch(`${JF}/Items/${req.params.id}?Fields=MediaSources`, { headers: JF_H });
-    const data = await r.json();
-    const streams = (data.MediaSources?.[0]?.MediaStreams ?? [])
-      .filter(s => s.Type === 'Audio')
-      .map(s => ({
-        index:     s.Index,
-        title:     s.DisplayTitle || [s.Language, s.Codec?.toUpperCase(), s.Channels ? s.Channels + 'ch' : ''].filter(Boolean).join(' · '),
-        language:  s.Language ?? null,
-        codec:     s.Codec ?? null,
-        channels:  s.Channels ?? null,
-        isDefault: s.IsDefault ?? false,
-      }));
-    res.json(streams);
-  } catch { res.status(502).json([]); }
-});
-
-// HLS master playlist
-app.get('/api/jellyfin/hls/:id', async (req, res) => {
-  const params = new URLSearchParams({
-    VideoCodec: 'h264',
-    AudioCodec: 'aac',
-    MaxWidth: '1920', MaxHeight: '1080',
-    MaxStreamingBitrate: '20000000',
-    TranscodingMaxAudioChannels: '2',
-    AudioBitRate: '192000',
-    MediaSourceId: req.params.id,
-    api_key: JELLYFIN_API_KEY,
-  });
-  if (req.query.audioIndex) params.set('AudioStreamIndex', req.query.audioIndex);
-  const masterUrl = `${JF}/Videos/${req.params.id}/master.m3u8?${params}`;
-  try {
-    const r = await fetch(masterUrl, { headers: JF_H });
-    if (!r.ok) return res.status(r.status).end();
-    let text = await r.text();
-    // Jellyfin a veces devuelve BANDWIDTH=0 en streams live — hls.js lo rechaza
-    text = text.replace(/BANDWIDTH=0,AVERAGE-BANDWIDTH=0/g, 'BANDWIDTH=2000000,AVERAGE-BANDWIDTH=2000000');
-    res.set('Content-Type', 'application/vnd.apple.mpegurl');
-    res.send(rewriteM3u8(text, masterUrl));
-  } catch { res.status(502).end(); }
-});
-
-// HLS segmentos y sub-playlists
-app.get('/api/jellyfin/hls-seg', async (req, res) => {
-  const u = decodeURIComponent(req.query.u ?? '');
-  if (!u) return res.status(400).end();
-  try {
-    const r  = await fetch(u, { headers: JF_H });
-    const ct = r.headers.get('content-type') ?? '';
-    if (ct.includes('mpegurl') || u.includes('.m3u8')) {
-      let text = await r.text();
-      text = text.replace(/BANDWIDTH=0,AVERAGE-BANDWIDTH=0/g, 'BANDWIDTH=2000000,AVERAGE-BANDWIDTH=2000000');
-      res.set('Content-Type', 'application/vnd.apple.mpegurl');
-      res.send(rewriteM3u8(text, u));
-    } else {
-      res.set('Content-Type', ct || 'video/mp2t');
-      r.body.pipe(res);
-    }
-  } catch { res.status(502).end(); }
-});
-
-// Fallback stream directo
-app.get('/api/jellyfin/stream/:id', async (req, res) => {
-  const url = `${JF}/Videos/${req.params.id}/stream?static=true&api_key=${JELLYFIN_API_KEY}`;
-  try {
-    const headers = { ...JF_H };
-    if (req.headers.range) headers['Range'] = req.headers.range;
-    const r = await fetch(url, { headers });
-    res.status(r.status);
-    for (const [k, v] of r.headers.entries())
-      if (['content-type','content-length','content-range','accept-ranges'].includes(k.toLowerCase()))
-        res.set(k, v);
-    r.body.pipe(res);
-  } catch { res.status(502).end(); }
-});
-
-function rewriteM3u8(text, baseUrl) {
-  const base = new URL(baseUrl);
-  const dir  = base.origin + base.pathname.substring(0, base.pathname.lastIndexOf('/') + 1);
-  return text.split('\n').map(line => {
-    const t = line.trim();
-    if (!t || t.startsWith('#')) return line;
-    let abs;
-    if (t.startsWith('http'))   abs = t;
-    else if (t.startsWith('/')) abs = base.origin + t;
-    else                        abs = dir + t;
-    return `/api/jellyfin/hls-seg?u=${encodeURIComponent(abs)}`;
-  }).join('\n');
 }
 
-// WebSocket sync
-const rooms     = new Map(); // roomId -> Set<ws>
-const roomState = new Map(); // roomId -> { itemId, title, t, paused, updatedAt }
+app.get('/api/jellyfin/recent', (_req, res) => lista(res, `/Items?${new URLSearchParams({
+  SortBy: 'DateCreated', SortOrder: 'Descending', IncludeItemTypes: 'Movie,Series', Recursive: 'true', Limit: '30', Fields: CAMPOS })}`));
 
-wss.on('connection', ws => {
-  let roomId = null;
-  ws.on('message', raw => {
-    let msg; try { msg = JSON.parse(raw); } catch { return; }
+app.get('/api/jellyfin/search', (req, res) => lista(res, `/Items?${new URLSearchParams({
+  searchTerm: String(req.query.q ?? '').slice(0, 100), IncludeItemTypes: 'Movie,Series', Recursive: 'true',
+  Limit: String(Math.min(+req.query.limit || 24, 50)), Fields: CAMPOS })}`));
 
-    if (msg.type === 'join') {
-      roomId = msg.roomId;
-      if (!rooms.has(roomId)) rooms.set(roomId, new Set());
-      rooms.get(roomId).add(ws);
-      // Enviar estado actual al recién llegado
-      if (roomState.has(roomId)) {
-        const s = roomState.get(roomId);
-        const elapsed = s.paused ? 0 : (Date.now() - s.updatedAt) / 1000;
-        ws.send(JSON.stringify({
-          type: 'sync', itemId: s.itemId, title: s.title,
-          t: s.t + elapsed, paused: s.paused,
-        }));
-      }
-      return;
-    }
-
-    // Actualizar estado de sala
-    if (roomId) {
-      const now = Date.now();
-      if (msg.type === 'load')  roomState.set(roomId, { itemId: msg.itemId, title: msg.title, t: 0,     paused: false, updatedAt: now });
-      else if (roomState.has(roomId)) {
-        const s = roomState.get(roomId);
-        if      (msg.type === 'play')  { s.t = msg.t; s.paused = false; s.updatedAt = now; }
-        else if (msg.type === 'pause') { s.t = msg.t; s.paused = true;  s.updatedAt = now; }
-        else if (msg.type === 'seek')  { s.t = msg.t;                   s.updatedAt = now; }
-      }
-    }
-
-    // Retransmitir a los demás
-    if (roomId && rooms.has(roomId)) {
-      const p = JSON.stringify(msg);
-      for (const peer of rooms.get(roomId))
-        if (peer !== ws && peer.readyState === 1) peer.send(p);
-    }
-  });
-  ws.on('close', () => {
-    if (roomId && rooms.has(roomId)) {
-      rooms.get(roomId).delete(ws);
-      if (!rooms.get(roomId).size) {
-        rooms.delete(roomId);
-        roomState.delete(roomId);
-      }
-    }
-  });
+app.get('/api/jellyfin/seasons/:id', (req, res) => {
+  if (!id(req.params.id)) return res.status(400).json([]);
+  lista(res, `/Shows/${req.params.id}/Seasons?Fields=Overview`);
 });
 
-server.listen(PORT, () => console.log(`Activity server :${PORT}`));
+app.get('/api/jellyfin/episodes/:id', (req, res) => {
+  if (!id(req.params.id) || !id(req.query.seasonId)) return res.status(400).json([]);
+  lista(res, `/Shows/${req.params.id}/Episodes?${new URLSearchParams({ Fields: 'Overview,RunTimeTicks', SeasonId: req.query.seasonId })}`);
+});
+
+async function tubo(r, res, cabeceras = ['content-type', 'content-length', 'content-range', 'accept-ranges', 'cache-control']) {
+  res.status(r.status);
+  for (const k of cabeceras) { const v = r.headers.get(k); if (v) res.set(k, v); }
+  if (!r.body) return res.end();
+  Readable.fromWeb(r.body).on('error', () => res.end()).pipe(res);
+}
+
+app.get('/api/jellyfin/image/:id', async (req, res) => {
+  if (!id(req.params.id)) return res.status(400).end();
+  const tipo = ['Primary', 'Backdrop', 'Thumb'].includes(req.query.type) ? req.query.type : 'Primary';
+  try {
+    const r = await jf(`/Items/${req.params.id}/Images/${tipo}?maxWidth=${Math.min(+req.query.width || 300, 1280)}`);
+    if (!r.ok) return res.status(404).end();
+    res.set('Cache-Control', 'public, max-age=86400');
+    tubo(r, res, ['content-type', 'content-length']);
+  } catch { res.status(502).end(); }
+});
+
+app.get('/api/jellyfin/mediainfo/:id', async (req, res) => {
+  if (!id(req.params.id)) return res.status(400).json([]);
+  try {
+    const d = await (await jf(`/Items/${req.params.id}?Fields=MediaSources`)).json();
+    res.json((d.MediaSources?.[0]?.MediaStreams ?? []).filter(s => s.Type === 'Audio').map(s => ({
+      index: s.Index, language: s.Language ?? null, codec: s.Codec ?? null, channels: s.Channels ?? null,
+      isDefault: s.IsDefault ?? false,
+      title: s.DisplayTitle || [s.Language, s.Codec?.toUpperCase(), s.Channels ? s.Channels + 'ch' : ''].filter(Boolean).join(' · '),
+    })));
+  } catch { res.status(502).json([]); }
+});
+
+// HLS: el master y las sub-listas se reescriben para que todo vuelva por aquí (con la sesión)
+function reescribir(texto, base, s, pre = '') {   // pre: '../' desde /hls/:id, '' desde /hls-seg
+  const b = new URL(base);
+  return texto.replace(/BANDWIDTH=0,AVERAGE-BANDWIDTH=0/g, 'BANDWIDTH=2000000,AVERAGE-BANDWIDTH=2000000')
+    .split('\n').map(l => {
+      const t = l.trim();
+      if (t.startsWith('#')) return l.replace(/URI="([^"]+)"/g, (_m, u) => `URI="${pre}${seg(new URL(u, b).href, s)}"`);
+      return t ? pre + seg(new URL(t, b).href, s) : l;
+    }).join('\n');
+}
+const seg = (abs, s) => `hls-seg?u=${encodeURIComponent(abs)}&s=${encodeURIComponent(s)}`;
+
+app.get('/api/jellyfin/hls/:id', async (req, res) => {
+  if (!id(req.params.id)) return res.status(400).end();
+  const p = new URLSearchParams({
+    MediaSourceId: req.params.id, VideoCodec: 'h264', AudioCodec: 'aac', MaxWidth: '1920', MaxHeight: '1080',
+    MaxStreamingBitrate: MAX_BITRATE, VideoBitrate: MAX_BITRATE, TranscodingMaxAudioChannels: '2', AudioBitRate: '192000',
+    SegmentContainer: 'ts', PlaySessionId: crypto.createHash('sha1').update(req.sesion + req.params.id).digest('hex').slice(0, 32),
+  });
+  if (/^\d{1,3}$/.test(req.query.audioIndex ?? '')) p.set('AudioStreamIndex', req.query.audioIndex);
+  const url = `${JF}/Videos/${req.params.id}/master.m3u8?${p}`;
+  try {
+    const r = await fetch(url, { headers: JF_H });
+    if (!r.ok) return res.status(r.status).end();
+    res.set('Content-Type', 'application/vnd.apple.mpegurl');
+    res.send(reescribir(await r.text(), url, req.sesion, '../'));
+  } catch { res.status(502).end(); }
+});
+
+app.get('/api/jellyfin/hls-seg', async (req, res) => {
+  let u;
+  try { u = new URL(String(req.query.u ?? '')); } catch { return res.status(400).end(); }
+  if (u.origin !== JF_ORIGIN) return res.status(403).end();       // nunca a otro sitio
+  try {
+    const r = await fetch(u, { headers: JF_H });
+    const ct = r.headers.get('content-type') ?? '';
+    if (ct.includes('mpegurl') || u.pathname.endsWith('.m3u8')) {
+      res.set('Content-Type', 'application/vnd.apple.mpegurl');
+      return res.send(reescribir(await r.text(), u.href, req.sesion));
+    }
+    tubo(r, res);
+  } catch { res.status(502).end(); }
+});
+
+app.get('/api/jellyfin/stream/:id', async (req, res) => {
+  if (!id(req.params.id)) return res.status(400).end();
+  try {
+    const r = await jf(`/Videos/${req.params.id}/stream?static=true`, req.headers.range ? { Range: req.headers.range } : {});
+    tubo(r, res);
+  } catch { res.status(502).end(); }
+});
+
+// ── sincronización: una sala por instancia de la Activity ──────────────────
+const salas = new Map();   // instanceId -> { socks:Set, estado }
+server.on('upgrade', (req, sock, head) => {
+  const u = new URL(req.url, 'http://x');
+  const ruta = u.pathname.replace(/^\/\.proxy/, '');
+  const s = leerSesion(u.searchParams.get('s'));
+  if (ruta !== '/ws' || !s) return sock.destroy();
+  wss.handleUpgrade(req, sock, head, ws => { ws.sala = s.i; wss.emit('connection', ws); });
+});
+
+wss.on('connection', ws => {
+  if (!salas.has(ws.sala)) salas.set(ws.sala, { socks: new Set(), estado: null });
+  const sala = salas.get(ws.sala);
+  sala.socks.add(ws);
+  if (sala.estado) {
+    const e = sala.estado, pasado = e.paused ? 0 : (Date.now() - e.updatedAt) / 1000;
+    ws.send(JSON.stringify({ type: 'sync', itemId: e.itemId, title: e.title, t: e.t + pasado, paused: e.paused }));
+  }
+  ws.on('message', raw => {
+    let m; try { m = JSON.parse(raw); } catch { return; }
+    if (!['load', 'play', 'pause', 'seek'].includes(m.type)) return;
+    const ahora = Date.now();
+    if (m.type === 'load') { if (!id(m.itemId)) return; sala.estado = { itemId: m.itemId, title: String(m.title ?? '').slice(0, 200), t: 0, paused: false, updatedAt: ahora }; }
+    else if (sala.estado) {
+      const t = Number(m.t); if (!Number.isFinite(t)) return;
+      Object.assign(sala.estado, { t, updatedAt: ahora }, m.type === 'play' ? { paused: false } : m.type === 'pause' ? { paused: true } : {});
+    }
+    const p = JSON.stringify(m);
+    for (const o of sala.socks) if (o !== ws && o.readyState === 1) o.send(p);
+  });
+  ws.on('close', () => { sala.socks.delete(ws); if (!sala.socks.size) salas.delete(ws.sala); });
+});
+
+server.listen(PORT, () => console.log(`Activity Jellyfin en :${PORT}`));

@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>jellyfin-actividad</Name>
+  <Repository>jellyfin-actividad:local</Repository>
+  <Network>bridge</Network>
+  <ExtraParams>--user 0</ExtraParams>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Overview>Discord Activity «Jellyfin»: ver juntos en un canal de voz. App de Discord 1516508812524261549 (Jellyfin bot). Pública en app.homestream.cc/actividad (Caddy). Solo vale dentro del servidor de HomeStream. Fuente: /mnt/user/appdata/jellyfin-actividad-src (repo nemesbak/discord-jellyfin-bot, carpeta activity).</Overview>
+  <Category>MediaServer:Video</Category>
+  <Config Name="Web" Target="3001" Default="3017" Mode="tcp" Type="Port" Display="always" Required="true" Mask="false">3017</Config>
+  <Config Name="odin.env (claves)" Target="/odin.env" Default="/boot/config/odin.env" Mode="ro" Type="Path" Display="always" Required="true" Mask="false">/boot/config/odin.env</Config>
+  <Config Name="ENV_FILE" Target="ENV_FILE" Default="/odin.env" Mode="" Type="Variable" Display="advanced" Required="true" Mask="false">/odin.env</Config>
+  <Config Name="ENV_MAP" Target="ENV_MAP" Default="" Mode="" Type="Variable" Display="advanced" Required="true" Mask="false">DISCORD_BOT_TOKEN:JELLYFIN_BOT_TOKEN,SESSION_SECRET:ACTIVIDAD_SECRET,JELLYFIN_API_KEY:JELLYFIN_KEY</Config>
+  <Config Name="App de Discord" Target="DISCORD_CLIENT_ID" Default="1516508812524261549" Mode="" Type="Variable" Display="always" Required="true" Mask="false">1516508812524261549</Config>
+  <Config Name="Servidores permitidos" Target="DISCORD_GUILDS" Default="1574056305402970194" Mode="" Type="Variable" Display="always" Required="true" Mask="false">1574056305402970194</Config>
+  <Config Name="Jellyfin" Target="JELLYFIN_URL" Default="http://192.168.1.25:8096" Mode="" Type="Variable" Display="always" Required="true" Mask="false">http://192.168.1.25:8096</Config>
+  <Config Name="TZ" Target="TZ" Default="Europe/Madrid" Mode="" Type="Variable" Display="advanced" Required="false" Mask="false">Europe/Madrid</Config>
+</Container>

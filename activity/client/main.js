@@ -1,6 +1,9 @@
 import { DiscordSDK } from '@discord/embedded-app-sdk';
 import Hls from 'hls.js';
 
+const P = location.hostname.endsWith('discordsays.com') ? '/.proxy' : '';
+let S = '';
+const A = ruta => `${P}${ruta}${ruta.includes('?') ? '&' : '?'}s=${encodeURIComponent(S)}`;
 const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
 // Limpia nombres de Jellyfin que incluyen metadatos en el propio texto
@@ -25,17 +28,23 @@ function sdkReadyWithTimeout(sdk, ms = 8000) {
 
 try {
   setStatus('Obteniendo config…');
-  const { clientId } = await fetch('/api/config').then(r => r.json());
+  const { clientId } = await fetch(P + '/api/config').then(r => r.json());
   const sdk = new DiscordSDK(clientId);
   setStatus('Esperando Discord…');
   try { await sdkReadyWithTimeout(sdk); } catch { /* sin sync de canal */ }
 
-  // WebSocket sync
-  const roomId  = sdk.channelId ? `${sdk.channelId}-${sdk.instanceId}` : 'default';
+  // Sesión: el servidor comprueba con Discord que esta actividad es real y de nuestro servidor
+  setStatus('Comprobando acceso…');
+  const ses = await fetch(P + '/api/sesion', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                               body: JSON.stringify({ instanceId: sdk.instanceId }) })
+    .then(r => r.json()).catch(() => ({ error: 'No se pudo conectar con el servidor.' }));
+  if (!ses.s) throw new Error(ses.error || 'Sin acceso');
+  S = ses.s;
+
+  // WebSocket sync (una sala por instancia de la actividad)
   const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const ws      = new WebSocket(`${wsProto}://${location.host}/ws`);
+  const ws      = new WebSocket(`${wsProto}://${location.host}${P}/ws?s=${encodeURIComponent(S)}`);
   let isSyncing = false;
-  ws.addEventListener('open', () => ws.send(JSON.stringify({ type: 'join', roomId })));
   ws.addEventListener('message', ({ data }) => {
     let msg; try { msg = JSON.parse(data); } catch { return; }
     isSyncing = true;
@@ -90,7 +99,7 @@ try {
     if (!currentItemId) return;
     audioWarn.classList.add('hidden');
     if (hls) { hls.destroy(); hls = null; }
-    video.src = `/api/jellyfin/stream/${currentItemId}`;
+    video.src = A(`/api/jellyfin/stream/${currentItemId}`);
     tryPlay();
   });
 
@@ -155,7 +164,7 @@ try {
 
     let tracks;
     try {
-      tracks = await fetch(`/api/jellyfin/mediainfo/${itemId}`).then(r => r.json());
+      tracks = await fetch(A(`/api/jellyfin/mediainfo/${itemId}`)).then(r => r.json());
     } catch { return; }
 
     if (!tracks || tracks.length < 2) return;
@@ -190,7 +199,7 @@ try {
     const paused = video.paused;
     if (hls) { hls.destroy(); hls = null; }
     clearAudioWarn();
-    const src = `/api/jellyfin/hls/${currentItemId}?audioIndex=${audioIndex}`;
+    const src = A(`/api/jellyfin/hls/${currentItemId}?audioIndex=${audioIndex}`);
     const onReady = () => {
       video.currentTime = t;
       if (paused) video.pause(); else tryPlay();
@@ -204,7 +213,7 @@ try {
         if (d.fatal) {
           console.error('[hls fatal reloadAudio]', d.type, d.details);
           hls.destroy(); hls = null;
-          video.src = `/api/jellyfin/stream/${currentItemId}`;
+          video.src = A(`/api/jellyfin/stream/${currentItemId}`);
           video.currentTime = t;
           tapToPlay.classList.remove('hidden');
         }
@@ -229,7 +238,7 @@ try {
 
     loadAudioTracks(itemId);
 
-    const src = `/api/jellyfin/hls/${itemId}`;
+    const src = A(`/api/jellyfin/hls/${itemId}`);
     const onReady = () => {
       if (startAt !== null) video.currentTime = startAt;
       if (startPaused) video.pause(); else tryPlay();
@@ -244,7 +253,7 @@ try {
         if (d.fatal) {
           console.error('[hls fatal loadVideo]', d.type, d.details);
           hls.destroy(); hls = null;
-          video.src = `/api/jellyfin/stream/${itemId}`;
+          video.src = A(`/api/jellyfin/stream/${itemId}`);
           if (startAt !== null) video.currentTime = startAt;
           tapToPlay.classList.remove('hidden');
         }
@@ -253,7 +262,7 @@ try {
       video.src = src;
       video.addEventListener('loadedmetadata', onReady, { once: true });
     } else {
-      video.src = `/api/jellyfin/stream/${itemId}`;
+      video.src = A(`/api/jellyfin/stream/${itemId}`);
       video.addEventListener('canplay', onReady, { once: true });
     }
     if (shouldBroadcast) broadcast({ type: 'load', itemId, title });
@@ -319,7 +328,7 @@ try {
     item._cleanName = cleanTitle(item.Name);
     document.getElementById('series-title').textContent = item._cleanName;
     showView('seasons');
-    const seasons = await fetch(`/api/jellyfin/seasons/${item.Id}`).then(r => r.json()).catch(() => []);
+    const seasons = await fetch(A(`/api/jellyfin/seasons/${item.Id}`)).then(r => r.json()).catch(() => []);
     const list = document.getElementById('seasons-list');
     list.innerHTML = '';
     for (const s of seasons) {
@@ -337,7 +346,7 @@ try {
   async function showEpisodes(series, season) {
     document.getElementById('season-title').textContent = `${series.Name} — ${season.Name}`;
     showView('episodes');
-    const eps = await fetch(`/api/jellyfin/episodes/${series.Id}?seasonId=${season.Id}`).then(r => r.json()).catch(() => []);
+    const eps = await fetch(A(`/api/jellyfin/episodes/${series.Id}?seasonId=${season.Id}`)).then(r => r.json()).catch(() => []);
     const list = document.getElementById('episodes-list');
     list.innerHTML = '';
     for (const ep of eps) {
@@ -387,7 +396,7 @@ try {
     const noResults = document.getElementById('no-results');
     grid.innerHTML  = '<div class="center-msg">Buscando…</div>';
     noResults.classList.add('hidden');
-    const items = await fetch(`/api/jellyfin/search?q=${encodeURIComponent(q)}&limit=30`).then(r => r.json()).catch(() => []);
+    const items = await fetch(A(`/api/jellyfin/search?q=${encodeURIComponent(q)}&limit=30`)).then(r => r.json()).catch(() => []);
     renderGrid(grid, noResults, items);
   }
 
@@ -409,7 +418,7 @@ try {
     const card = document.createElement('div');
     card.className = 'card';
     card.innerHTML = `
-      <img src="/api/jellyfin/image/${item.Id}" alt="" loading="lazy" onerror="this.style.minHeight='120px'">
+      <img src="${A(`/api/jellyfin/image/${item.Id}`)}" alt="" loading="lazy" onerror="this.style.minHeight='120px'">
       <div class="card-overlay">
         <div class="card-title">${esc(label)}</div>
         ${badge}
@@ -425,7 +434,7 @@ try {
   async function loadRecent() {
     const grid = document.getElementById('recent-grid');
     grid.innerHTML = '<div class="center-msg">Cargando…</div>';
-    const items = await fetch('/api/jellyfin/recent').then(r => r.json()).catch(() => []);
+    const items = await fetch(A('/api/jellyfin/recent')).then(r => r.json()).catch(() => []);
     grid.innerHTML = '';
     for (const item of items) grid.appendChild(buildCard(item));
   }
