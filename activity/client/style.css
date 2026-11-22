@@ -148,7 +148,7 @@ body{
 .ep-overview{font-size:.7rem;color:#888;margin-top:5px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 
 /* ── Reproductor ─────────────────────────────────────────────────────────── */
-#view-player{height:100%}
+#view-player{position:fixed;inset:0;z-index:50;background:#000}
 .video-wrap{
   height:100%;display:flex;flex-direction:column;
   position:relative;background:#000;overflow:hidden;
@@ -298,3 +298,12 @@ body{
 @media(max-width:360px){
   .grid{grid-template-columns:repeat(3,1fr);gap:5px}
 }
+
+/* Modo cine: el vídeo ocupa toda la ventana de la actividad y las barras se esconden solas */
+.video-wrap.fullscreen .player-top-bar,.video-wrap.fullscreen .player-bottom-bar{
+  position:absolute;left:0;right:0;transition:opacity .3s}
+.video-wrap.fullscreen .player-top-bar{top:0}
+.video-wrap.fullscreen .player-bottom-bar{bottom:0}
+.video-wrap.fullscreen:not(.barras) .player-top-bar,.video-wrap.fullscreen:not(.barras) .player-bottom-bar{opacity:0;pointer-events:none}
+.video-wrap.fullscreen #video{height:100%}
+#fs-btn{gap:6px;font-size:.85rem;font-weight:600}

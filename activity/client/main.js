@@ -284,22 +284,38 @@ try {
     return (document.exitFullscreen?.() ?? document.webkitExitFullscreen?.() ?? Promise.reject());
   }
 
-  fsBtn.addEventListener('click', () => {
-    if (document.fullscreenElement || document.webkitFullscreenElement) {
-      exitFs().catch(() => {});
-    } else {
-      requestFs().catch(() => {
-        isFs = !isFs;
-        videoWrap.classList.toggle('fullscreen', isFs);
-        fsBtn.textContent = isFs ? '✕' : '⛶';
-      });
-    }
+  // Dentro de Discord el navegador no siempre deja la pantalla completa real: si falla, «modo cine»
+  // (el vídeo llena la ventana de la actividad) y en el móvil se gira a horizontal.
+  const ORIENT = { UNLOCKED: 1, LANDSCAPE: 3 };
+  function orientacion(estado) {
+    if (!isMobile || !sdk?.commands?.setOrientationLockState) return;
+    sdk.commands.setOrientationLockState({ lock_state: estado, picture_in_picture_lock_state: estado, grid_lock_state: estado }).catch(() => {});
+  }
+  function modoCine(on) {
+    isFs = on;
+    videoWrap.classList.toggle('fullscreen', on);
+    fsBtn.textContent = on ? '✕ Salir' : '⛶ Pantalla completa';
+    orientacion(on ? ORIENT.LANDSCAPE : ORIENT.UNLOCKED);
+    if (on) mostrarBarras();
+  }
+  let ocultar;
+  function mostrarBarras() {
+    videoWrap.classList.add('barras');
+    clearTimeout(ocultar);
+    ocultar = setTimeout(() => { if (isFs && !video.paused) videoWrap.classList.remove('barras'); }, 3000);
+  }
+  ['mousemove', 'touchstart', 'click'].forEach(ev => videoWrap.addEventListener(ev, () => { if (isFs) mostrarBarras(); }, { passive: true }));
+  video.addEventListener('pause', () => { if (isFs) videoWrap.classList.add('barras'); });
+
+  fsBtn.addEventListener('click', e => {
+    e.stopPropagation();
+    if (document.fullscreenElement || document.webkitFullscreenElement) { exitFs().catch(() => {}); return; }
+    if (isFs) { modoCine(false); return; }
+    requestFs().then(() => modoCine(true)).catch(() => modoCine(true));
   });
 
   const onFsChange = () => {
-    const inFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
-    fsBtn.textContent = inFs ? '✕' : '⛶';
-    if (!inFs) { isFs = false; videoWrap.classList.remove('fullscreen'); }
+    if (!(document.fullscreenElement || document.webkitFullscreenElement)) modoCine(false);
   };
   document.addEventListener('fullscreenchange', onFsChange);
   document.addEventListener('webkitfullscreenchange', onFsChange);
@@ -314,8 +330,7 @@ try {
   document.getElementById('back-btn').addEventListener('click', () => {
     video.pause();
     if (hls) { hls.destroy(); hls = null; }
-    videoWrap.classList.remove('fullscreen');
-    isFs = false;
+    if (isFs) modoCine(false);
     closeAudioMenu();
     showView(currentSeries ? 'episodes' : 'home');
   });
