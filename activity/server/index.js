@@ -53,6 +53,20 @@ function leerSesion(s) {
   return v.e > Date.now() ? v : null;
 }
 
+const cacheMiembros = new Map();   // uid -> { t, ok }
+async function esMiembro(uid) {
+  if (!/^\d{5,25}$/.test(String(uid))) return false;
+  const c = cacheMiembros.get(uid);
+  if (c && c.t > Date.now() - 600e3) return c.ok;
+  let ok = false;
+  for (const g of GUILDS) {
+    const r = await fetch(`https://discord.com/api/v10/guilds/${g}/members/${uid}`, { headers: { Authorization: `Bot ${BOT_TOKEN}` } });
+    if (r.ok) { ok = true; break; }
+  }
+  cacheMiembros.set(uid, { t: Date.now(), ok });
+  return ok;
+}
+
 // Comprueba con Discord que la instancia existe, es de esta app y está en uno de nuestros servidores
 const cacheInst = new Map();
 async function instanciaValida(instanceId) {
@@ -66,6 +80,12 @@ async function instanciaValida(instanceId) {
     const d = await r.json();
     const guild = d.location?.guild_id;
     if (!GUILDS.length || GUILDS.includes(guild)) v = { guild, users: d.users ?? [] };
+    // en privado (MD con el bot o grupo): vale si TODOS los que están son miembros de nuestro servidor
+    else if (!guild && GUILDS.length && (d.users ?? []).length) {
+      let todos = true;
+      for (const u of d.users) if (!(await esMiembro(u))) { todos = false; break; }
+      if (todos) v = { guild: GUILDS[0], users: d.users, privado: true };
+    }
   }
   cacheInst.set(instanceId, { t: Date.now(), v });
   return v;
@@ -86,7 +106,7 @@ app.post('/api/sesion', async (req, res) => {
   try {
     if (PREVIEW && req.body?.instanceId === 'preview') return res.json({ s: nuevaSesion('preview', []) });
     const v = await instanciaValida(req.body?.instanceId);
-    if (!v) return res.status(403).json({ error: 'Esta actividad solo funciona dentro del servidor de HomeStream.' });
+    if (!v) return res.status(403).json({ error: 'Solo para miembros del servidor de HomeStream en Discord.' });
     res.json({ s: nuevaSesion(req.body.instanceId, v.users) });
   } catch (e) {
     console.error('sesion', e.message);
