@@ -125,7 +125,7 @@ app.get('/api/jellyfin/top', (req, res) => lista(res, `/Items?${new URLSearchPar
 app.get('/api/jellyfin/item/:id', async (req, res) => {
   if (!id(req.params.id)) return res.status(400).json({});
   try {
-    const d = await (await jf(`/Items/${req.params.id}?Fields=Overview,Genres,ProductionYear,RunTimeTicks,OfficialRating,CommunityRating,ChildCount`)).json();
+    const d = ((await (await jf(`/Items?Ids=${req.params.id}&Fields=Overview,Genres,ProductionYear,RunTimeTicks,OfficialRating,CommunityRating,ChildCount`)).json()).Items ?? [])[0] ?? {};
     const { Id, Name, Overview, Genres, ProductionYear, RunTimeTicks, OfficialRating, CommunityRating, Type, ImageTags, BackdropImageTags, ChildCount, SeriesId, SeriesName } = d;
     res.json({ Id, Name, Overview, Genres, ProductionYear, RunTimeTicks, OfficialRating, CommunityRating, Type, ChildCount, SeriesId, SeriesName,
                hasLogo: !!ImageTags?.Logo, hasBackdrop: !!BackdropImageTags?.length });
@@ -167,7 +167,7 @@ app.get('/api/jellyfin/image/:id', async (req, res) => {
 app.get('/api/jellyfin/mediainfo/:id', async (req, res) => {
   if (!id(req.params.id)) return res.status(400).json([]);
   try {
-    const d = await (await jf(`/Items/${req.params.id}?Fields=MediaSources`)).json();
+    const d = ((await (await jf(`/Items?Ids=${req.params.id}&Fields=MediaSources`)).json()).Items ?? [])[0] ?? {};
     res.json((d.MediaSources?.[0]?.MediaStreams ?? []).filter(s => s.Type === 'Audio').map(s => ({
       index: s.Index, language: s.Language ?? null, codec: s.Codec ?? null, channels: s.Channels ?? null,
       isDefault: s.IsDefault ?? false,
