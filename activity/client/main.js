@@ -1,4 +1,4 @@
-// HomeStream Cine — cliente de la Activity (v5, 2026-11-22)
+// HomeStream Cine — cliente de la Activity (v6, 2026-11-22: estilo D, sala con caras, filas arrastrables)
 import { DiscordSDK } from '@discord/embedded-app-sdk';
 import Hls from 'hls.js';
 
@@ -41,15 +41,119 @@ function arrancar() {
   const enviar = m => { if (ws.readyState === 1) ws.send(JSON.stringify(m)); };
   ws.addEventListener('message', ({ data }) => {
     let m; try { m = JSON.parse(data); } catch { return; }
-    if (m.type === 'gente') { document.querySelectorAll('.gente b').forEach(b => (b.textContent = m.n)); return; }
+    if (m.type === 'gente') { document.querySelectorAll('.gente b').forEach(b => (b.textContent = m.n)); salaN = m.n; refrescarSala(); return; }
     sincronizando = true;
-    if (m.type === 'load') { reproducir({ Id: m.itemId, Name: m.title, sub: m.sub }, 0, false, false); aviso('Alguien ha puesto ' + m.title); }
+    if (m.type === 'cola') { cola = m.cola; pintarCola(); return; }
+    if (m.type === 'load') { reproducir({ Id: m.itemId, Name: m.title, sub: m.sub }, 0, false, false); aviso(m.desdeCola ? '▶ Siguiente de la cola: ' + m.title : 'Alguien ha puesto ' + m.title); }
     if (m.type === 'sync') reproducir({ Id: m.itemId, Name: m.title, sub: m.sub }, m.t, m.paused, false);
     if (m.type === 'play') { video.currentTime = m.t; video.play().catch(pedirToque); }
     if (m.type === 'pause') { video.currentTime = m.t; video.pause(); }
     if (m.type === 'seek') video.currentTime = m.t;
     setTimeout(() => (sincronizando = false), 200);
   });
+
+  // ── quién está en la sala ─────────────────────────────────────────────────
+  let salaN = 1, tSala, gente = [];
+  const cara = (p, cls = '') => p.avatar
+    ? `<img class="cara ${cls}" alt="" src="${A('/api/jellyfin/avatar?p=' + encodeURIComponent(p.avatar))}">`
+    : `<span class="cara ${cls}" style="--h:${[...p.nombre].reduce((a, c) => a + c.charCodeAt(0), 0) % 360}">${esc(p.nombre[0]?.toUpperCase() ?? '?')}</span>`;
+  function pintarSala() {
+    $('caras').innerHTML = gente.slice(0, 3).map(p => cara(p)).join('');
+    $('sala-n').textContent = salaN === 1 ? 'Solo tú de momento' : `${salaN} personas`;
+    $('sala-lista').innerHTML = gente.length
+      ? gente.map(p => `<div class="sala-p">${cara(p, 'g')}<span>${esc(p.nombre)}</span><i>viendo</i></div>`).join('')
+      : '<p class="sala-vacia">Invita a tus amigos al canal de voz y que abran la actividad para ver juntos lo mismo.</p>';
+  }
+  function refrescarSala() {
+    clearTimeout(tSala);
+    tSala = setTimeout(async () => { gente = await api('/api/jellyfin/gente').catch(() => gente); pintarSala(); }, 400);
+  }
+  $('gente').onclick = e => {
+    e.stopPropagation();
+    const abierto = $('sala-pop').classList.toggle('hidden') === false;
+    $('gente').setAttribute('aria-expanded', abierto);
+    if (abierto) refrescarSala();
+  };
+  $('sala-pop').addEventListener('click', e => e.stopPropagation());
+  document.addEventListener('click', () => { $('sala-pop').classList.add('hidden'); $('gente').setAttribute('aria-expanded', 'false'); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') $('sala-pop').classList.add('hidden'); });
+  $('sala-invitar').onclick = () => {
+    const p = sdk?.commands?.openInviteDialog?.();
+    if (p) p.catch(() => aviso('Invita desde Discord: pulsa el nombre del canal de voz → Invitar'));
+    else aviso('Invita desde Discord: pulsa el nombre del canal de voz → Invitar');
+  };
+  pintarSala(); refrescarSala();
+
+  // ── filas horizontales: arrastrar con el ratón y mover con la rueda (en móvil ya va con el dedo) ──
+  const HORIZ = '.carril, .chips, .tabs, .pestanas, .segmentado';
+  const desborda = el => el.scrollWidth > el.clientWidth + 2;
+  function bordes(el) {
+    el.classList.toggle('mas-izq', el.scrollLeft > 4);
+    el.classList.toggle('mas-der', el.scrollLeft + el.clientWidth < el.scrollWidth - 4);
+  }
+  document.addEventListener('scroll', e => { if (e.target.matches?.(HORIZ)) bordes(e.target); }, true);
+  const repasar = () => document.querySelectorAll(HORIZ).forEach(bordes);
+  new MutationObserver(() => requestAnimationFrame(repasar)).observe($('app'), { childList: true, subtree: true });
+  addEventListener('resize', repasar);
+  // (2026-11-22) la rueda ya NO mueve las filas de lado: solo flechas y arrastrar; así la página baja siempre
+  let arr = null;
+  document.addEventListener('pointerdown', e => {
+    if (e.pointerType !== 'mouse' || e.button !== 0) return;
+    const el = e.target.closest?.(HORIZ);
+    if (!el || !desborda(el)) return;
+    arr = { el, x: e.clientX, izq: el.scrollLeft, movido: false, ult: e.clientX, t: performance.now(), v: 0 };
+  });
+  document.addEventListener('pointermove', e => {
+    if (!arr) return;
+    const dx = e.clientX - arr.x;
+    if (!arr.movido && Math.abs(dx) < 6) return;
+    if (!arr.movido) { arr.movido = true; arr.el.classList.add('arrastrando'); }
+    const ahora = performance.now();
+    arr.v = (e.clientX - arr.ult) / Math.max(1, ahora - arr.t); arr.ult = e.clientX; arr.t = ahora;
+    arr.el.scrollLeft = arr.izq - dx;
+  });
+  const soltar = () => {
+    if (!arr) return;
+    const { el, movido } = arr; let v = arr.v * 16; arr = null;
+    el.classList.remove('arrastrando');
+    if (!movido) return;
+    const tragar = ev => { ev.stopPropagation(); ev.preventDefault(); };   // que soltar tras arrastrar no abra la tarjeta
+    window.addEventListener('click', tragar, { capture: true, once: true });
+    setTimeout(() => window.removeEventListener('click', tragar, { capture: true }), 60);
+    const inercia = () => { if (Math.abs(v) < .5) return; el.scrollLeft -= v; v *= .92; requestAnimationFrame(inercia); };
+    requestAnimationFrame(inercia);
+  };
+  document.addEventListener('pointerup', soltar);
+  document.addEventListener('pointercancel', soltar);
+  document.addEventListener('dragstart', e => { if (e.target.closest?.(HORIZ)) e.preventDefault(); });
+
+  // ── cola compartida del canal ────────────────────────────────────────────
+  let cola = [];
+  const mandarCola = c => enviar({ type: 'cola', cola: c });
+  function aLaCola(item) {
+    if (cola.some(x => x.itemId === item.Id)) return aviso('Ya está en la cola');
+    mandarCola([...cola, { itemId: item.Id, title: limpio(item.Name), sub: item.sub ?? '' }]);
+    aviso('Añadido a la cola: ' + limpio(item.Name));
+  }
+  function pintarCola() {
+    document.querySelectorAll('.cola-n').forEach(b => { b.textContent = cola.length; b.classList.toggle('hidden', !cola.length); });
+    $('cola-lista').replaceChildren(...cola.map((x, i) => {
+      const d = document.createElement('div');
+      d.className = 'cola-item';
+      d.innerHTML = `<img alt="" src="${img(x.itemId, 'Primary', 120)}" onerror="this.style.visibility='hidden'">
+        <div><b>${esc(x.title)}</b><small>${esc(x.sub)}</small></div>
+        <button class="btn-icon" data-a="sube" aria-label="Subir" ${i ? '' : 'disabled'}>↑</button>
+        <button class="btn-icon" data-a="quita" aria-label="Quitar">✕</button>`;
+      d.querySelector('[data-a=sube]').onclick = () => { const c = [...cola]; [c[i - 1], c[i]] = [c[i], c[i - 1]]; mandarCola(c); };
+      d.querySelector('[data-a=quita]').onclick = () => mandarCola(cola.filter((_, j) => j !== i));
+      return d;
+    }));
+    $('cola-vacia').classList.toggle('hidden', cola.length > 0);
+  }
+  const abrirCola = () => $('cola').classList.toggle('hidden');
+  $('btn-cola').onclick = abrirCola;
+  $('p-cola').onclick = e => { e.stopPropagation(); abrirCola(); };
+  $('cola-cerrar').onclick = () => $('cola').classList.add('hidden');
 
   // ── navegación ───────────────────────────────────────────────────────────
   const vistas = ['v-inicio', 'v-biblio', 'v-libs', 'v-buscar', 'v-ficha'];
@@ -257,9 +361,9 @@ function arrancar() {
         <div class="meta">${metaHTML(d)}</div>
         ${d.Genres?.length ? `<div class="generos">${esc(d.Genres.slice(0, 4).join(' · '))}</div>` : ''}
         <p>${esc(d.Overview ?? '')}</p>
-        ${esSerie ? '' : '<div class="acciones"><button class="btn-primary btn-lg" id="ficha-ver">▶ Ver juntos</button></div>'}
+        ${esSerie ? '' : '<div class="acciones"><button class="btn-primary btn-lg" id="ficha-ver">▶ Ver juntos</button><button class="btn-ghost btn-lg" id="ficha-cola">＋ A la cola</button></div>'}
       </div>`;
-    if (!esSerie) { $('ficha-ver').onclick = () => reproducir(d, 0, false, true); return; }
+    if (!esSerie) { $('ficha-ver').onclick = () => reproducir(d, 0, false, true); $('ficha-cola').onclick = () => aLaCola(d); return; }
     serieActual = d;
     const temps = await api(`/api/jellyfin/seasons/${d.Id}`).catch(() => []);
     if (!temps.length) return;
@@ -281,8 +385,9 @@ function arrancar() {
       b.className = 'ep';
       b.innerHTML = `<div class="ep-img"><img loading="lazy" alt="" src="${img(e.Id, 'Primary', 400)}" onerror="this.remove()"></div>
         <div><div class="ep-t"><span>${e.IndexNumber ?? ''}</span>${esc(limpio(e.Name))}</div>
-        <div class="ep-m">${hm(e.RunTimeTicks)}</div><div class="ep-o">${esc(e.Overview ?? '')}</div></div>`;
-      b.onclick = () => reproducir(episodio(e), 0, false, true);
+        <div class="ep-m">${hm(e.RunTimeTicks)}</div><div class="ep-o">${esc(e.Overview ?? '')}</div></div>
+        <span class="btn-icon ep-cola" role="button" aria-label="Añadir a la cola" title="Añadir a la cola">＋</span>`;
+      b.onclick = ev => { if (ev.target.closest('.ep-cola')) return aLaCola(episodio(e)); reproducir(episodio(e), 0, false, true); };
       return b;
     }));
     if (!episodiosActuales.length) $('episodios').innerHTML = '<p class="vacio">Esta temporada no tiene episodios.</p>';
@@ -379,7 +484,10 @@ function arrancar() {
   }
   function siguienteVisible() { $('p-siguiente').classList.toggle('hidden', !siguiente()); }
   $('p-siguiente').onclick = () => { const s = siguiente(); if (s) reproducir(episodio(s), 0, false, true); };
-  video.addEventListener('ended', () => { const s = siguiente(); if (s) setTimeout(() => reproducir(episodio(s), 0, false, true), 1500); });
+  video.addEventListener('ended', () => {
+    if (cola.length) return enviar({ type: 'siguiente', desde: actual?.Id });   // la cola manda sobre el siguiente episodio
+    const s = siguiente(); if (s) setTimeout(() => reproducir(episodio(s), 0, false, true), 1500);
+  });
 
   // controles
   function pedirToque() { $('p-grande').classList.remove('hidden'); }

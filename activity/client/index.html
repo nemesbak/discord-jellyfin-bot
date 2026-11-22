@@ -27,8 +27,25 @@
         <span aria-hidden="true">⌕</span>
         <input id="q" type="search" placeholder="Buscar pelis y series" autocomplete="off" spellcheck="false" />
       </label>
-      <div class="gente" id="gente" title="Personas viendo en este canal">👥 <b>1</b></div>
+      <div class="sala">
+        <button class="gente" id="gente" aria-haspopup="true" aria-expanded="false" title="Quién está en la sala">
+          <span class="caras" id="caras"></span><span class="vivo" aria-hidden="true"></span><b>1</b>
+        </button>
+        <div class="sala-pop hidden" id="sala-pop" role="dialog" aria-label="Quién está en la sala">
+          <div class="sala-cab"><b>En la sala</b><span id="sala-n">1 persona</span></div>
+          <div class="sala-lista" id="sala-lista"></div>
+          <button class="btn-primary sala-invitar" id="sala-invitar">＋ Invitar a alguien</button>
+        </div>
+      </div>
+      <button class="btn-icon con-n" id="btn-cola" aria-label="Cola" title="Cola de reproducción">☰<span class="cola-n hidden">0</span></button>
     </header>
+
+    <!-- Cola compartida (la ve y la cambia todo el canal) -->
+    <aside id="cola" class="cola hidden" aria-label="Cola de reproducción">
+      <div class="cola-cab"><b>Cola del canal</b><button class="btn-icon" id="cola-cerrar" aria-label="Cerrar">✕</button></div>
+      <p id="cola-vacia" class="vacio">Vacía. Añade pelis o episodios con «＋ A la cola»: se ponen solas al acabar lo que veis.</p>
+      <div id="cola-lista"></div>
+    </aside>
 
     <!-- INICIO -->
     <main id="v-inicio" class="vista">
@@ -120,6 +137,7 @@
             <button id="p-audio" class="btn-ghost btn-sm">🔊 <span id="p-audio-txt">Audio</span></button>
             <div class="lista-audio hidden" id="lista-audio"></div>
           </div>
+          <button id="p-cola" class="btn-icon con-n" aria-label="Cola">☰<span class="cola-n hidden">0</span></button>
           <button id="p-vol" class="btn-icon" aria-label="Silenciar">🔊</button>
           <button id="p-full" class="btn-icon" aria-label="Pantalla completa">⛶</button>
         </div>

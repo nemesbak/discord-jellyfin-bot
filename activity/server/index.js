@@ -113,6 +113,42 @@ async function lista(res, ruta) {
   } catch { res.status(502).json([]); }
 }
 
+// ── quién está en la sala (nombres y avatares de Discord, vía el bot) ──────
+const cacheMiembro = new Map();   // guild:uid -> { t, v }
+async function miembro(guild, uid) {
+  const k = `${guild}:${uid}`, c = cacheMiembro.get(k);
+  if (c && c.t > Date.now() - 600e3) return c.v;
+  let v = { id: uid, nombre: 'Alguien', avatar: null };
+  try {
+    const r = await fetch(`https://discord.com/api/v10/guilds/${guild}/members/${uid}`, { headers: { Authorization: `Bot ${BOT_TOKEN}` } });
+    if (r.ok) {
+      const m = await r.json();
+      v = { id: uid, nombre: m.nick || m.user?.global_name || m.user?.username || 'Alguien',
+            avatar: m.avatar ? `guilds/${guild}/users/${uid}/avatars/${m.avatar}` : m.user?.avatar ? `avatars/${uid}/${m.user.avatar}` : null };
+    }
+  } catch {}
+  cacheMiembro.set(k, { t: Date.now(), v });
+  return v;
+}
+app.get('/api/jellyfin/gente', async (req, res) => {
+  const s = leerSesion(req.sesion);
+  if (s.i === 'preview') return res.json([]);
+  cacheInst.delete(s.i);                                   // lista fresca
+  const inst = await instanciaValida(s.i).catch(() => null);
+  if (!inst) return res.json([]);
+  res.json(await Promise.all(inst.users.slice(0, 25).map(u => miembro(inst.guild, u))));
+});
+app.get('/api/jellyfin/avatar', async (req, res) => {        // los avatares pasan por aquí (Discord no deja cargar su CDN dentro de la actividad)
+  const p = String(req.query.p ?? '');
+  if (!/^(avatars\/\d+\/\w+|guilds\/\d+\/users\/\d+\/avatars\/\w+)$/.test(p)) return res.status(400).end();
+  try {
+    const r = await fetch(`https://cdn.discordapp.com/${p}.png?size=64`);
+    if (!r.ok) return res.status(404).end();
+    res.set('Content-Type', 'image/png').set('Cache-Control', 'private, max-age=86400');
+    res.end(Buffer.from(await r.arrayBuffer()));
+  } catch { res.status(502).end(); }
+});
+
 app.get('/api/jellyfin/recent', (req, res) => lista(res, `/Items?${new URLSearchParams({
   SortBy: 'DateCreated', SortOrder: 'Descending', Recursive: 'true', Limit: '30', Fields: CAMPOS,
   IncludeItemTypes: ['Movie', 'Series'].includes(req.query.type) ? req.query.type : 'Movie,Series',
@@ -281,17 +317,32 @@ server.on('upgrade', (req, sock, head) => {
 });
 
 wss.on('connection', ws => {
-  if (!salas.has(ws.sala)) salas.set(ws.sala, { socks: new Set(), estado: null });
+  if (!salas.has(ws.sala)) salas.set(ws.sala, { socks: new Set(), estado: null, cola: [] });
   const sala = salas.get(ws.sala);
   sala.socks.add(ws);
   const gente = () => { const p = JSON.stringify({ type: 'gente', n: sala.socks.size }); for (const o of sala.socks) if (o.readyState === 1) o.send(p); };
   gente();
+  ws.send(JSON.stringify({ type: 'cola', cola: sala.cola }));
   if (sala.estado) {
     const e = sala.estado, pasado = e.paused ? 0 : (Date.now() - e.updatedAt) / 1000;
     ws.send(JSON.stringify({ type: 'sync', itemId: e.itemId, title: e.title, sub: e.sub, t: e.t + pasado, paused: e.paused }));
   }
   ws.on('message', raw => {
     let m; try { m = JSON.parse(raw); } catch { return; }
+    const todos = p => { for (const o of sala.socks) if (o.readyState === 1) o.send(p); };
+    if (m.type === 'cola') {                       // la cola entera, la cambie quien la cambie
+      if (!Array.isArray(m.cola)) return;
+      sala.cola = m.cola.filter(x => id(x?.itemId)).slice(0, 50)
+        .map(x => ({ itemId: x.itemId, title: String(x.title ?? '').slice(0, 200), sub: String(x.sub ?? '').slice(0, 200) }));
+      return todos(JSON.stringify({ type: 'cola', cola: sala.cola }));
+    }
+    if (m.type === 'siguiente') {                  // terminó lo que se veía: pasa al primero de la cola (solo una vez)
+      if (!sala.cola.length || (sala.estado && sala.estado.itemId !== m.desde)) return;
+      const x = sala.cola.shift();
+      sala.estado = { ...x, t: 0, paused: false, updatedAt: Date.now() };
+      todos(JSON.stringify({ type: 'load', ...x, desdeCola: true }));
+      return todos(JSON.stringify({ type: 'cola', cola: sala.cola }));
+    }
     if (!['load', 'play', 'pause', 'seek'].includes(m.type)) return;
     const ahora = Date.now();
     if (m.type === 'load') { if (!id(m.itemId)) return; sala.estado = { itemId: m.itemId, title: String(m.title ?? '').slice(0, 200), sub: String(m.sub ?? '').slice(0, 200), t: 0, paused: false, updatedAt: ahora }; }
