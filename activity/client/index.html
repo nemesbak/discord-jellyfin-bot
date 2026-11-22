@@ -3,97 +3,93 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <meta name="theme-color" content="#0a0a0f" />
-  <title>Jellyfin Watch Party</title>
+  <meta name="theme-color" content="#0b0c10" />
+  <title>HomeStream Cine</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="stylesheet" href="./style.css" />
 </head>
 <body>
 
-  <div id="loading"><div class="spinner"></div><p>Conectando…</p></div>
+  <div id="loading">
+    <div class="marca">HOME<b>STREAM</b></div>
+    <div class="spinner"></div>
+    <p>Conectando…</p>
+  </div>
 
   <div id="app" class="hidden">
 
-    <!-- HOME -->
-    <div id="view-home">
-      <header class="app-header">
-        <span class="logo">🎬</span>
-        <div class="search-wrap">
-          <span class="search-icon">⌕</span>
-          <input id="search-input" type="search" placeholder="Buscar…" autocomplete="off" autocorrect="off" spellcheck="false" />
-          <button id="search-clear" class="icon-btn hidden" aria-label="Limpiar">✕</button>
-        </div>
-      </header>
-      <div id="home-content">
-        <div class="section-title">Recién añadido</div>
-        <div id="recent-grid" class="grid"></div>
-      </div>
-      <div id="search-content" class="hidden">
-        <div id="search-results" class="grid"></div>
-        <div id="no-results" class="hidden center-msg">Sin resultados</div>
-      </div>
-    </div>
+    <!-- Barra superior (todas las vistas menos el reproductor) -->
+    <header id="topbar">
+      <button id="btn-atras" class="icono hidden" aria-label="Volver">‹</button>
+      <div class="marca" id="btn-inicio">HOME<b>STREAM</b> <span>Cine</span></div>
+      <label class="buscar">
+        <span aria-hidden="true">⌕</span>
+        <input id="q" type="search" placeholder="Buscar pelis y series" autocomplete="off" spellcheck="false" />
+      </label>
+      <div class="gente" id="gente" title="Personas viendo en este canal">👥 <b>1</b></div>
+    </header>
 
-    <!-- TEMPORADAS -->
-    <div id="view-seasons" class="hidden">
-      <header class="app-header">
-        <button class="back-btn" id="back-to-home">‹ Inicio</button>
-        <span class="header-title" id="series-title"></span>
-      </header>
-      <div id="seasons-list" class="ep-list"></div>
-    </div>
+    <!-- INICIO -->
+    <main id="v-inicio" class="vista">
+      <section id="hero" class="hero"></section>
+      <div id="filas"></div>
+    </main>
 
-    <!-- EPISODIOS -->
-    <div id="view-episodes" class="hidden">
-      <header class="app-header">
-        <button class="back-btn" id="back-to-seasons">‹ Temporadas</button>
-        <span class="header-title" id="season-title"></span>
-      </header>
-      <div id="episodes-list" class="ep-list"></div>
-    </div>
+    <!-- BÚSQUEDA -->
+    <main id="v-buscar" class="vista hidden">
+      <h2 class="titulo-seccion" id="buscar-titulo">Resultados</h2>
+      <div id="resultados" class="rejilla"></div>
+      <p id="sin-resultados" class="vacio hidden">No hay nada con ese nombre.</p>
+    </main>
+
+    <!-- FICHA -->
+    <main id="v-ficha" class="vista hidden">
+      <section class="ficha-cab" id="ficha-cab"></section>
+      <section id="ficha-temporadas" class="hidden">
+        <div class="pestanas" id="pestanas"></div>
+        <div class="episodios" id="episodios"></div>
+      </section>
+    </main>
 
     <!-- REPRODUCTOR -->
-    <div id="view-player" class="hidden">
-      <div class="video-wrap" id="video-wrap">
-
-        <!-- Barra superior -->
-        <div class="player-top-bar">
-          <button class="player-back-btn" id="back-btn" aria-label="Volver">‹</button>
-          <span id="now-playing-title"></span>
-        </div>
-
-        <!-- Vídeo -->
-        <video id="video" controls preload="auto" playsinline webkit-playsinline></video>
-
-        <!-- Barra inferior: pista de audio + fullscreen -->
-        <div class="player-bottom-bar">
-          <div class="player-bottom-left">
-            <div class="track-selector hidden" id="audio-selector">
-              <button class="track-btn" id="audio-btn" aria-haspopup="true">
-                <span class="track-btn-icon">🔊</span>
-                <span id="audio-label">Audio</span>
-                <span class="track-chevron">▾</span>
-              </button>
-              <div class="track-menu hidden" id="audio-menu" role="listbox"></div>
-            </div>
-          </div>
-          <div class="player-bottom-right">
-            <button class="player-icon-btn" id="fs-btn" aria-label="Pantalla completa">⛶ Pantalla completa</button>
-          </div>
-        </div>
-
-        <!-- Overlays -->
-        <div id="video-error" class="video-error hidden">No se puede reproducir este contenido</div>
-        <div id="audio-warn" class="audio-warn hidden">
-          Sin audio — <button id="audio-retry">Stream directo</button>
-        </div>
-        <div id="tap-to-play" class="tap-to-play hidden">
-          <div class="tap-icon">▶</div>
-          <div class="tap-label">Toca para reproducir</div>
-        </div>
-
+    <section id="v-player" class="hidden">
+      <video id="video" playsinline webkit-playsinline preload="auto"></video>
+      <div id="p-spinner" class="spinner hidden"></div>
+      <button id="p-grande" class="p-grande hidden" aria-label="Reproducir">▶</button>
+      <div id="p-error" class="p-error hidden">
+        <p>No se puede reproducir este título.</p>
+        <button id="p-directo" class="boton">Probar sin convertir</button>
       </div>
-    </div>
 
+      <div class="p-arriba">
+        <button id="p-volver" class="icono" aria-label="Volver">‹</button>
+        <div class="p-titulo"><b id="p-nombre"></b><span id="p-sub"></span></div>
+        <div class="gente" id="p-gente">👥 <b>1</b></div>
+      </div>
+
+      <div class="p-abajo">
+        <div class="barra" id="barra">
+          <div class="barra-buffer" id="barra-buffer"></div>
+          <div class="barra-hecho" id="barra-hecho"></div>
+          <div class="barra-bola" id="barra-bola"></div>
+          <div class="barra-tip hidden" id="barra-tip">0:00</div>
+        </div>
+        <div class="p-controles">
+          <button id="p-play" class="icono" aria-label="Pausa">❚❚</button>
+          <button id="p-menos" class="icono" aria-label="Atrás 10 segundos">↺<small>10</small></button>
+          <button id="p-mas" class="icono" aria-label="Adelante 10 segundos">↻<small>10</small></button>
+          <span class="tiempo"><span id="t-actual">0:00</span> / <span id="t-total">0:00</span></span>
+          <span class="hueco"></span>
+          <button id="p-siguiente" class="boton-sec hidden">Siguiente episodio ›</button>
+          <div class="menu-audio hidden" id="menu-audio">
+            <button id="p-audio" class="boton-sec">🔊 <span id="p-audio-txt">Audio</span></button>
+            <div class="lista-audio hidden" id="lista-audio"></div>
+          </div>
+          <button id="p-vol" class="icono" aria-label="Silenciar">🔊</button>
+          <button id="p-full" class="icono" aria-label="Pantalla completa">⛶</button>
+        </div>
+      </div>
+    </section>
   </div>
 
   <script type="module" src="./main.js"></script>

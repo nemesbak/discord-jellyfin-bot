@@ -111,8 +111,26 @@ async function lista(res, ruta) {
   } catch { res.status(502).json([]); }
 }
 
-app.get('/api/jellyfin/recent', (_req, res) => lista(res, `/Items?${new URLSearchParams({
-  SortBy: 'DateCreated', SortOrder: 'Descending', IncludeItemTypes: 'Movie,Series', Recursive: 'true', Limit: '30', Fields: CAMPOS })}`));
+app.get('/api/jellyfin/recent', (req, res) => lista(res, `/Items?${new URLSearchParams({
+  SortBy: 'DateCreated', SortOrder: 'Descending', Recursive: 'true', Limit: '30', Fields: CAMPOS,
+  IncludeItemTypes: ['Movie', 'Series'].includes(req.query.type) ? req.query.type : 'Movie,Series',
+  ImageTypes: 'Primary' })}`));
+
+app.get('/api/jellyfin/top', (req, res) => lista(res, `/Items?${new URLSearchParams({
+  SortBy: 'CommunityRating', SortOrder: 'Descending', Recursive: 'true', Limit: '30', Fields: CAMPOS,
+  IncludeItemTypes: ['Movie', 'Series'].includes(req.query.type) ? req.query.type : 'Movie',
+  MinPremiereDate: new Date(Date.now() - 3 * 365 * 864e5).toISOString().slice(0, 10), MinCommunityRating: '7',
+  ImageTypes: 'Backdrop' })}`));
+
+app.get('/api/jellyfin/item/:id', async (req, res) => {
+  if (!id(req.params.id)) return res.status(400).json({});
+  try {
+    const d = await (await jf(`/Items/${req.params.id}?Fields=Overview,Genres,ProductionYear,RunTimeTicks,OfficialRating,CommunityRating,ChildCount`)).json();
+    const { Id, Name, Overview, Genres, ProductionYear, RunTimeTicks, OfficialRating, CommunityRating, Type, ImageTags, BackdropImageTags, ChildCount, SeriesId, SeriesName } = d;
+    res.json({ Id, Name, Overview, Genres, ProductionYear, RunTimeTicks, OfficialRating, CommunityRating, Type, ChildCount, SeriesId, SeriesName,
+               hasLogo: !!ImageTags?.Logo, hasBackdrop: !!BackdropImageTags?.length });
+  } catch { res.status(502).json({}); }
+});
 
 app.get('/api/jellyfin/search', (req, res) => lista(res, `/Items?${new URLSearchParams({
   searchTerm: String(req.query.q ?? '').slice(0, 100), IncludeItemTypes: 'Movie,Series', Recursive: 'true',
@@ -125,7 +143,7 @@ app.get('/api/jellyfin/seasons/:id', (req, res) => {
 
 app.get('/api/jellyfin/episodes/:id', (req, res) => {
   if (!id(req.params.id) || !id(req.query.seasonId)) return res.status(400).json([]);
-  lista(res, `/Shows/${req.params.id}/Episodes?${new URLSearchParams({ Fields: 'Overview,RunTimeTicks', SeasonId: req.query.seasonId })}`);
+  lista(res, `/Shows/${req.params.id}/Episodes?${new URLSearchParams({ Fields: 'Overview,RunTimeTicks', SeasonId: req.query.seasonId, EnableImageTypes: 'Primary,Thumb' })}`);
 });
 
 async function tubo(r, res, cabeceras = ['content-type', 'content-length', 'content-range', 'accept-ranges', 'cache-control']) {
@@ -137,9 +155,9 @@ async function tubo(r, res, cabeceras = ['content-type', 'content-length', 'cont
 
 app.get('/api/jellyfin/image/:id', async (req, res) => {
   if (!id(req.params.id)) return res.status(400).end();
-  const tipo = ['Primary', 'Backdrop', 'Thumb'].includes(req.query.type) ? req.query.type : 'Primary';
+  const tipo = ['Primary', 'Backdrop', 'Thumb', 'Logo'].includes(req.query.type) ? req.query.type : 'Primary';
   try {
-    const r = await jf(`/Items/${req.params.id}/Images/${tipo}?maxWidth=${Math.min(+req.query.width || 300, 1280)}`);
+    const r = await jf(`/Items/${req.params.id}/Images/${tipo}?maxWidth=${Math.min(+req.query.width || 300, 1920)}`);
     if (!r.ok) return res.status(404).end();
     res.set('Cache-Control', 'public, max-age=86400');
     tubo(r, res, ['content-type', 'content-length']);
@@ -224,15 +242,17 @@ wss.on('connection', ws => {
   if (!salas.has(ws.sala)) salas.set(ws.sala, { socks: new Set(), estado: null });
   const sala = salas.get(ws.sala);
   sala.socks.add(ws);
+  const gente = () => { const p = JSON.stringify({ type: 'gente', n: sala.socks.size }); for (const o of sala.socks) if (o.readyState === 1) o.send(p); };
+  gente();
   if (sala.estado) {
     const e = sala.estado, pasado = e.paused ? 0 : (Date.now() - e.updatedAt) / 1000;
-    ws.send(JSON.stringify({ type: 'sync', itemId: e.itemId, title: e.title, t: e.t + pasado, paused: e.paused }));
+    ws.send(JSON.stringify({ type: 'sync', itemId: e.itemId, title: e.title, sub: e.sub, t: e.t + pasado, paused: e.paused }));
   }
   ws.on('message', raw => {
     let m; try { m = JSON.parse(raw); } catch { return; }
     if (!['load', 'play', 'pause', 'seek'].includes(m.type)) return;
     const ahora = Date.now();
-    if (m.type === 'load') { if (!id(m.itemId)) return; sala.estado = { itemId: m.itemId, title: String(m.title ?? '').slice(0, 200), t: 0, paused: false, updatedAt: ahora }; }
+    if (m.type === 'load') { if (!id(m.itemId)) return; sala.estado = { itemId: m.itemId, title: String(m.title ?? '').slice(0, 200), sub: String(m.sub ?? '').slice(0, 200), t: 0, paused: false, updatedAt: ahora }; }
     else if (sala.estado) {
       const t = Number(m.t); if (!Number.isFinite(t)) return;
       Object.assign(sala.estado, { t, updatedAt: ahora }, m.type === 'play' ? { paused: false } : m.type === 'pause' ? { paused: true } : {});
@@ -240,7 +260,7 @@ wss.on('connection', ws => {
     const p = JSON.stringify(m);
     for (const o of sala.socks) if (o !== ws && o.readyState === 1) o.send(p);
   });
-  ws.on('close', () => { sala.socks.delete(ws); if (!sala.socks.size) salas.delete(ws.sala); });
+  ws.on('close', () => { sala.socks.delete(ws); if (!sala.socks.size) salas.delete(ws.sala); else gente(); });
 });
 
 server.listen(PORT, () => console.log(`Activity Jellyfin en :${PORT}`));
